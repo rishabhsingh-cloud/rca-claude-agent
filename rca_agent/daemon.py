@@ -55,9 +55,7 @@ def already_processed(issue: dict) -> bool:
 def _should_post(v, post_mode: str) -> bool:
     if post_mode == "dry":
         return False
-    if post_mode == "gated":          # skip LOW/insufficient
-        return v.confidence is not Confidence.LOW
-    return True                        # "all"
+    return True  # post all confidence levels; LOW gets a disclaimer via verdict_to_adf
 
 
 async def poll_once(jql: str, post_mode: str, max_tickets: int) -> int:
