@@ -1,0 +1,44 @@
+name: CI / CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── 1. Tests ──────────────────────────────────────────────────────────────
+  # Runs on GitHub's cloud (no secrets needed — mock backend only).
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run tests
+        run: pytest -q
+
+  # ── 2. Deploy ─────────────────────────────────────────────────────────────
+  # Runs on the self-hosted runner INSIDE the internal network (EC2).
+  # Triggered only on pushes to main (not on PRs).
+  deploy:
+    needs: test
+    runs-on: self-hosted
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install / upgrade package
+        run: pip install -e ".[live]"
+
+      - name: Restart daemon
+        # Requires: sudo visudo  ->  runner ALL=(ALL) NOPASSWD: /bin/systemctl restart rca-daemon
+        run: sudo systemctl restart rca-daemon
