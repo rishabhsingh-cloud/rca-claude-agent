@@ -37,8 +37,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install / upgrade package
-        run: pip install -e ".[live]"
+        run: /home/rishabh/rca-claude-agent/.venv/bin/pip install -e ".[live]"
 
       - name: Restart daemon
-        # Requires: sudo visudo  ->  runner ALL=(ALL) NOPASSWD: /bin/systemctl restart rca-daemon
         run: sudo systemctl restart rca-daemon
