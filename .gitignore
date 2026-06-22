@@ -1,0 +1,20 @@
+# graphify build output (the persistent run is checked in under fixtures/graphs/)
+graphify-out/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Local env
+.env
+
+out/
+
+# Published index = proprietary internal data (architecture doc + code graphs of
+# private repos). NOT version-controlled here; built by the indexer / shipped to
+# the server separately.
+index/

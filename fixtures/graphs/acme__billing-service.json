@@ -1,0 +1,99 @@
+{
+  "project": "acme/billing-service",
+  "sha": "abc1234d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+  "nodes": [
+    {
+      "id": "billing/api.py::create_invoice_endpoint",
+      "name": "create_invoice_endpoint",
+      "qualname": "create_invoice_endpoint",
+      "kind": "function",
+      "file": "billing/api.py",
+      "line": 11
+    },
+    {
+      "id": "billing/invoice.py::LineItem",
+      "name": "LineItem",
+      "qualname": "LineItem",
+      "kind": "class",
+      "file": "billing/invoice.py",
+      "line": 9
+    },
+    {
+      "id": "billing/invoice.py::Invoice",
+      "name": "Invoice",
+      "qualname": "Invoice",
+      "kind": "class",
+      "file": "billing/invoice.py",
+      "line": 14
+    },
+    {
+      "id": "billing/invoice.py::Invoice.__init__",
+      "name": "__init__",
+      "qualname": "Invoice.__init__",
+      "kind": "method",
+      "file": "billing/invoice.py",
+      "line": 15
+    },
+    {
+      "id": "billing/invoice.py::Invoice.subtotal",
+      "name": "subtotal",
+      "qualname": "Invoice.subtotal",
+      "kind": "method",
+      "file": "billing/invoice.py",
+      "line": 22
+    },
+    {
+      "id": "billing/invoice.py::Invoice.compute_total",
+      "name": "compute_total",
+      "qualname": "Invoice.compute_total",
+      "kind": "method",
+      "file": "billing/invoice.py",
+      "line": 25
+    },
+    {
+      "id": "billing/invoice.py::build_invoice",
+      "name": "build_invoice",
+      "qualname": "build_invoice",
+      "kind": "function",
+      "file": "billing/invoice.py",
+      "line": 30
+    }
+  ],
+  "edges": [
+    {
+      "src": "billing/api.py::create_invoice_endpoint",
+      "dst": "billing/invoice.py::build_invoice",
+      "provenance": "extracted"
+    },
+    {
+      "src": "billing/api.py::create_invoice_endpoint",
+      "dst": "billing/invoice.py::Invoice.compute_total",
+      "provenance": "extracted"
+    },
+    {
+      "src": "billing/invoice.py::Invoice.compute_total",
+      "dst": "billing/invoice.py::Invoice.subtotal",
+      "provenance": "extracted"
+    },
+    {
+      "src": "billing/invoice.py::build_invoice",
+      "dst": "billing/invoice.py::LineItem",
+      "provenance": "extracted"
+    },
+    {
+      "src": "billing/invoice.py::build_invoice",
+      "dst": "billing/invoice.py::Invoice",
+      "provenance": "extracted"
+    }
+  ],
+  "imports": {
+    "billing/api.py": [
+      "billing.invoice",
+      "flask"
+    ],
+    "billing/invoice.py": [
+      "billing.config",
+      "dataclasses"
+    ]
+  }
+}

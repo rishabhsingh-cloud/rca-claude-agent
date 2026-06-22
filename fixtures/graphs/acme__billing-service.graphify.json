@@ -1,0 +1,259 @@
+{
+  "directed": true,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "label": "api.py",
+      "file_type": "code",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/api.py",
+      "source_location": "L1",
+      "_origin": "ast",
+      "id": "billing_api",
+      "community": 0,
+      "norm_label": "api.py"
+    },
+    {
+      "label": "create_invoice_endpoint()",
+      "file_type": "code",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/api.py",
+      "source_location": "L11",
+      "_origin": "ast",
+      "id": "billing_api_create_invoice_endpoint",
+      "community": 0,
+      "norm_label": "create_invoice_endpoint()"
+    },
+    {
+      "label": "invoice.py",
+      "file_type": "code",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/invoice.py",
+      "source_location": "L1",
+      "_origin": "ast",
+      "id": "billing_invoice",
+      "community": 0,
+      "norm_label": "invoice.py"
+    },
+    {
+      "label": "LineItem",
+      "file_type": "code",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/invoice.py",
+      "source_location": "L9",
+      "_origin": "ast",
+      "id": "billing_invoice_lineitem",
+      "community": 2,
+      "norm_label": "lineitem"
+    },
+    {
+      "label": "Invoice",
+      "file_type": "code",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/invoice.py",
+      "source_location": "L14",
+      "_origin": "ast",
+      "id": "billing_invoice_invoice",
+      "community": 1,
+      "norm_label": "invoice"
+    },
+    {
+      "label": ".__init__()",
+      "file_type": "code",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/invoice.py",
+      "source_location": "L15",
+      "_origin": "ast",
+      "id": "billing_invoice_invoice_init",
+      "community": 2,
+      "norm_label": ".__init__()"
+    },
+    {
+      "label": ".subtotal()",
+      "file_type": "code",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/invoice.py",
+      "source_location": "L22",
+      "_origin": "ast",
+      "id": "billing_invoice_invoice_subtotal",
+      "community": 1,
+      "norm_label": ".subtotal()"
+    },
+    {
+      "label": ".compute_total()",
+      "file_type": "code",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/invoice.py",
+      "source_location": "L25",
+      "_origin": "ast",
+      "id": "billing_invoice_invoice_compute_total",
+      "community": 1,
+      "norm_label": ".compute_total()"
+    },
+    {
+      "label": "build_invoice()",
+      "file_type": "code",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/invoice.py",
+      "source_location": "L30",
+      "_origin": "ast",
+      "id": "billing_invoice_build_invoice",
+      "community": 0,
+      "norm_label": "build_invoice()"
+    },
+    {
+      "label": "Invoice totalling for the billing service.",
+      "file_type": "rationale",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/invoice.py",
+      "source_location": "L1",
+      "_origin": "ast",
+      "id": "billing_invoice_rationale_1",
+      "community": 0,
+      "norm_label": "invoice totalling for the billing service."
+    }
+  ],
+  "links": [
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/api.py",
+      "source_location": "L11",
+      "weight": 1.0,
+      "source": "billing_api",
+      "target": "billing_api_create_invoice_endpoint",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/api.py",
+      "source_location": "L5",
+      "weight": 1.0,
+      "source": "billing_api",
+      "target": "billing_invoice",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/api.py",
+      "source_location": "L15",
+      "weight": 1.0,
+      "source": "billing_api_create_invoice_endpoint",
+      "target": "billing_invoice_build_invoice"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/invoice.py",
+      "source_location": "L30",
+      "weight": 1.0,
+      "source": "billing_invoice",
+      "target": "billing_invoice_build_invoice",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/invoice.py",
+      "source_location": "L14",
+      "weight": 1.0,
+      "source": "billing_invoice",
+      "target": "billing_invoice_invoice",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/invoice.py",
+      "source_location": "L9",
+      "weight": 1.0,
+      "source": "billing_invoice",
+      "target": "billing_invoice_lineitem",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/invoice.py",
+      "source_location": "L25",
+      "weight": 1.0,
+      "source": "billing_invoice_invoice",
+      "target": "billing_invoice_invoice_compute_total",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/invoice.py",
+      "source_location": "L15",
+      "weight": 1.0,
+      "source": "billing_invoice_invoice",
+      "target": "billing_invoice_invoice_init",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/invoice.py",
+      "source_location": "L22",
+      "weight": 1.0,
+      "source": "billing_invoice_invoice",
+      "target": "billing_invoice_invoice_subtotal",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "context": "generic_arg",
+      "confidence": "EXTRACTED",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/invoice.py",
+      "source_location": "L15",
+      "weight": 1.0,
+      "source": "billing_invoice_invoice_init",
+      "target": "billing_invoice_lineitem",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/invoice.py",
+      "source_location": "L27",
+      "weight": 1.0,
+      "source": "billing_invoice_invoice_compute_total",
+      "target": "billing_invoice_invoice_subtotal",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/invoice.py",
+      "source_location": "L32",
+      "weight": 1.0,
+      "source": "billing_invoice_build_invoice",
+      "target": "billing_invoice_invoice",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/invoice.py",
+      "source_location": "L31",
+      "weight": 1.0,
+      "source": "billing_invoice_build_invoice",
+      "target": "billing_invoice_lineitem",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "fixtures/gitlab/acme__billing-service/files/billing/invoice.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "billing_invoice_rationale_1",
+      "target": "billing_invoice",
+      "confidence_score": 1.0
+    }
+  ],
+  "hyperedges": [],
+  "project": "acme/billing-service",
+  "sha": "abc1234d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+  "path_strip": "fixtures/gitlab/acme__billing-service/files"
+}

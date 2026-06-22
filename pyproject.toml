@@ -1,0 +1,24 @@
+[project]
+name = "rca-agent"
+version = "0.1.0"
+description = "Accuracy-first RCA agent over Jira tickets + self-hosted GitLab (trace-first slice)"
+requires-python = ">=3.10"
+dependencies = [
+    # Agent loop / MCP wiring. Needed only for the --agent path.
+    "claude-agent-sdk>=0.1.0",
+]
+
+[project.optional-dependencies]
+# Live GitLab backend (RestGitLabClient). The mock path needs neither.
+live = ["httpx>=0.27"]
+dev = ["pytest>=8.0", "httpx>=0.27"]
+
+[project.scripts]
+rca = "rca_agent.run:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["rca_agent"]

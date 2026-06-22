@@ -1,0 +1,14 @@
+{
+  "key": "RCA-101",
+  "summary": "TypeError computing invoice total after tax-config refactor",
+  "status": "Open",
+  "priority": "High",
+  "reporter": "qa.team",
+  "assignee": null,
+  "created": "2026-06-18T08:12:00.000+00:00",
+  "labels": ["billing", "regression-suspect"],
+  "description": "Customers in the APAC region get a 500 when creating an invoice. Started this week. Repro: POST /invoices for a customer whose region isn't 'us' or 'eu'.\n\nTraceback from the API logs:\n\nTraceback (most recent call last):\n  File \"billing/api.py\", line 16, in create_invoice_endpoint\n    total = invoice.compute_total()\n  File \"billing/invoice.py\", line 27, in compute_total\n    return self.subtotal() * self.tax_rate\nTypeError: unsupported operand type(s) for *: 'float' and 'NoneType'\n\nUS and EU customers are unaffected.",
+  "comments": [
+    {"author": "qa.team", "created": "2026-06-18T08:20:00.000+00:00", "body": "Only reproduces for regions outside us/eu. Smells like the tax config change that went out this week."}
+  ]
+}

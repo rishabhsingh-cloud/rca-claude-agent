@@ -1,0 +1,165 @@
+# RCA Agent — trace-first slice
+
+Accuracy-first root-cause analysis over Jira tickets + self-hosted GitLab.
+This repo implements the **highest-accuracy slice** of the design
+([rca-agent-design.md](../../Downloads/rca-agent-design.md)): the deterministic
+**trace → blame → introducing-MR → regression verdict** path, runnable today
+against recorded fixtures with no credentials.
+
+```
+Jira ticket
+  -> parse_stack_trace        (deterministic; ground truth if a trace exists)
+  -> route_repo               (local summaries; hypothesis only)
+  -> fetch_file_lines         (GitLab; VERIFICATION PASS — confirm the line)
+  -> git_blame                (GitLab; which commit last changed the line)
+  -> merge_requests_for_commit(GitLab; the introducing MR -> regression?)
+  -> structured verdict for QA
+```
+
+## Quick start (mock backend, no API key)
+
+```bash
+python -m rca_agent.run --ticket RCA-101          # human-readable verdict
+python -m rca_agent.run --ticket RCA-101 --json   # structured JSON
+python -m rca_agent.index acme/billing-service \
+    --sha <sha> --date 2026-06-20                  # (re)build graph map + summary
+python -m pytest -q                                # tests (pip install pytest)
+```
+
+Expected: a **HIGH-confidence regression** verdict for `RCA-101`, with a full
+evidence chain ending at MR !42 in `acme/billing-service`. A ticket without a
+trace degrades honestly to **LOW confidence + candidates** ("needs a human")
+rather than inventing a cause.
+
+## Two execution paths, one source of truth
+
+| Path | Command | When | Needs |
+|---|---|---|---|
+| **Deterministic pipeline** | (default) | Clean trace-first tickets; the eval baseline | nothing |
+| **Agent loop** | `--agent` | Fuzzier / no-trace tickets where judgement helps | `claude-agent-sdk` + `ANTHROPIC_API_KEY` |
+
+Both use the **same** read-only tools ([`tools.py`](rca_agent/tools.py)) and the
+**same** verdict schema ([`schema.py`](rca_agent/schema.py)), so they're
+directly comparable on the eval set.
+
+## Backends
+
+Selected by `RCA_BACKEND` (see [.env.example](.env.example)):
+
+- **`mock`** (default) — reads on-disk fixtures under `fixtures/`. No network, no PAT.
+- **`live`** — `RestGitLabClient` hits a self-hosted GitLab REST API (read-only:
+  files/raw, blame, commits, commit→MRs, **tree enumeration**) with a
+  `read_api`/`read_repository` PAT. Same interface, so all tool/pipeline/indexer
+  code is unchanged.
+
+**Jira** is fetched via the **Atlassian remote MCP server** (`jira.py`): the agent
+loop attaches it and calls `getJiraIssue` / JQL itself (read-only; OAuth, no PAT).
+A raw Atlassian issue is turned into ticket text by `normalize_jira_issue`, which
+flattens ADF (Atlassian Document Format) so a **stack trace inside an ADF code
+block survives into the trace parser** — see the `RCA-201` fixture.
+
+## Going live
+
+1. **GitLab**: set `RCA_BACKEND=live`, `GITLAB_URL`, `GITLAB_TOKEN` (read scope).
+2. **Index the real repos** (the indexer now enumerates + fetches the live file
+   tree through the GitLab client): `python -m rca_agent.index <project> --ref main`
+   — publishes the graph map + summary the RCA agent reads.
+3. **Jira**: run the `--agent` path; the Atlassian MCP server handles the OAuth
+   flow and the agent fetches tickets by key. (The deterministic path takes
+   ticket text; for live Jira there, normalize a `getJiraIssue` payload with
+   `normalize_jira_issue`.)
+
+Everything above is wired and unit-tested against mocks; flipping to live is
+credentials + the index step, not new code.
+
+## Layout
+
+```
+rca_agent/
+  stack_trace.py     trace parsing (Python/Java/JS + generic), normalized crash-last
+  routing.py         route_repo over local repo summaries (path tokens weighted 3x)
+  gitlab_client.py   GitLabClient protocol + MockGitLabClient + RestGitLabClient (read-only)
+  graph.py           symbol-level directed call graph (AST) + queries (callers/callees/subgraph)
+  graph_store.py     build/load/cache per repo: AST map -> graphify export -> build-from-source
+  graphify_adapter.py normalize a graphify graph.json into the same RepoGraph
+  summarize.py       deterministic repo-summary generator (auto block + preserved human block)
+  index.py           the indexer's core: writes graph map + summary (RCA agent stays read-only)
+  investigation.py   the deterministic trace-first pipeline -> Verdict (incl. blast radius)
+  tools.py           the same primitives as Agent SDK @tool MCP server (mcp__rca__*)
+  prompts.py         accuracy-guardrail system prompt + structured-output contract
+  agent.py           Agent SDK driver (query loop) + verdict parsing
+  schema.py          Verdict / EvidenceLink / Triage / Confidence + JSON schema
+  run.py             CLI
+fixtures/
+  tickets/           Jira-shaped ticket JSON
+  gitlab/<proj>/     files/ (real source) + meta.json (blame/commits/MRs)
+  repo_summaries/    per-repo .md (auto + human blocks) — generated by index.py
+  graphs/            published graph maps (<proj>.json); optional <proj>.graphify.json
+tests/               deterministic-core tests (trace-first + graph)
+```
+
+## The code graph (Step 3)
+
+From a suspect symbol the agent can trace **callers** (where bad input came from
++ the blast radius to retest), **callees** (dependencies), and **import
+dependents**. The deterministic pipeline already attaches the blast radius to the
+verdict (e.g. `compute_total` -> retest `create_invoice_endpoint`).
+
+- **Engine**: a directed symbol-level call graph built from Python source with
+  the stdlib `ast` (`graph.py`) — precise, dependency-free, edge-direction
+  preserving, with provenance (`extracted`/`ambiguous`/`inferred`) on each edge.
+- **graphify bridge**: `graphify_adapter.py` loads a graphify `graph.json` into
+  the same model for multi-language / larger repos (build graphify with
+  `--directed` for true caller→callee direction; undirected graphs record both
+  ways and mark edges `inferred`). Validated against a **real `graphify --directed`
+  run** on the billing repo (saved at `fixtures/graphs/<proj>.graphify.json`); the
+  store prefers the AST map, falls back to a graphify export when present.
+  *Engine difference observed:* graphify is conservative about attribute calls —
+  it didn't resolve `invoice.compute_total()` to the method, so it found no caller
+  for `compute_total`, whereas the AST engine resolves it by name and recovers
+  `create_invoice_endpoint`. The AST engine gives a fuller blast radius on Python;
+  graphify trades that for fewer false edges and multi-language coverage.
+- **Guardrail**: `mcp__rca__graph_has_edge` lets the agent check "does A call B?"
+  before asserting it — the design's "flag A→B if the graph has no edge" rule.
+- Summaries and the graph come from **one AST pass** (`index.py`), so they can't
+  drift apart; both are SHA-stamped for staleness checks.
+
+## How this maps to the design's build order
+
+- **Step 1** (read-only GitLab + ticket fetch): GitLab client + ticket loader — done (mock; live impl present).
+- **Step 2** (trace → blame → MR; regression detection): **this slice** — done & tested.
+- **Step 3** (`route_repo` + graph tools): **done** — `route_repo`, the
+  symbol-level call graph (`find_callers`/`find_dependents`/`get_subgraph` +
+  `graph_has_edge`), the summary generator/indexer, and blast-radius in the verdict.
+- **Step 4** (evidence-chain + verification + structured output): enforced in the
+  pipeline and in the system prompt; verdict is structured.
+- **Steps 5–6** (eval set, indexer agent): not yet — the deterministic pipeline is
+  the eval baseline to build on.
+
+## Known limitations / next steps
+
+- **No temperature control.** The Claude Agent SDK does not expose sampling
+  parameters, so the design's "low temperature" lever isn't available. Accuracy
+  is instead enforced via deterministic tools + the evidence-chain system prompt
+  + required structured output. (`effort` is available if stricter reasoning
+  control is wanted.)
+- **Deploy-path normalization.** Traces with absolute paths (`/srv/app/...`) are
+  preserved verbatim; mapping them to repo-relative paths is a refinement.
+- **`route_repo` is keyword-based.** Fine for trace-first (the path is a strong
+  signal); the no-trace path will want real GitLab search / graph tracing.
+- **AST graph is Python-only** and resolves calls by name (intra-repo, best-effort
+  — overloads land as `ambiguous` edges). Other languages go through the graphify
+  adapter. Cross-service edges (HTTP/queue) aren't modeled — that's open question
+  #3 in the design (microservices).
+- **Call graph ≠ data flow.** Blast radius (callers) is exact; it won't by itself
+  pinpoint a bad *value* (e.g. the `tax_rate` assignment) — blame + reading the
+  fetched code does that.
+- **Live backends are code-complete but unrun against real servers.** The GitLab
+  REST client (incl. tree enumeration for live indexing) and the Atlassian MCP
+  wiring are implemented and tested against mocks/recorded payloads; neither has
+  hit a real instance yet. Going live = credentials + `python -m rca_agent.index`.
+- **Agent path needs the SDK + `ANTHROPIC_API_KEY`** (and Atlassian OAuth for the
+  Jira MCP); the deterministic path is fully exercised by the tests.
+- **Jira ADF normalization** is validated on a recorded issue shape; the exact
+  payload the hosted Atlassian MCP returns may differ — `normalize_jira_issue`
+  tolerates both ADF and pre-rendered strings, but confirm on first live fetch.

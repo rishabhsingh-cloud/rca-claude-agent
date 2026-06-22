@@ -1,0 +1,43 @@
+{
+  "ref": "main",
+  "blame": {
+    "billing/invoice.py": [
+      {"commit": "0aa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9", "count": 17},
+      {"commit": "abc1234d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b", "count": 10},
+      {"commit": "0aa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9", "count": 5}
+    ],
+    "billing/api.py": [
+      {"commit": "0aa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9", "count": 17}
+    ]
+  },
+  "commits": {
+    "0aa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9": {
+      "id": "0aa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9",
+      "short_id": "0aa1b2c3",
+      "title": "Initial billing service",
+      "author_name": "Sam Rivera",
+      "authored_date": "2026-01-12T09:30:00.000+00:00",
+      "message": "Initial billing service\n\nInvoice model, totalling, and HTTP API."
+    },
+    "abc1234d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b": {
+      "id": "abc1234d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+      "short_id": "abc1234d",
+      "title": "Refactor tax configuration loading",
+      "author_name": "Dana Lee",
+      "authored_date": "2026-06-15T14:02:11.000+00:00",
+      "message": "Refactor tax configuration loading\n\nLoad tax rates from the new regional config map. Falls back to .get(\"rate\") which yields None for regions not present in the map."
+    }
+  },
+  "commit_mrs": {
+    "abc1234d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b": [
+      {
+        "iid": 42,
+        "title": "Refactor tax configuration loading",
+        "author": "dana.lee",
+        "web_url": "https://gitlab.example.com/acme/billing-service/-/merge_requests/42",
+        "merged_at": "2026-06-15T15:40:00.000+00:00",
+        "state": "merged"
+      }
+    ]
+  }
+}
