@@ -31,9 +31,9 @@ from .jira import JiraClient
 from .schema import Confidence
 from .tickets import flatten_adf
 
-# New AUT bugs not yet resolved; the comment-dedup below handles "already done".
+# Bugs filed today in AUT; comment-dedup handles already-processed tickets.
 DEFAULT_JQL = ("project = AUT AND issuetype = Bug AND statusCategory != Done "
-               "AND updated >= -14d ORDER BY created DESC")
+               "AND created >= startOfDay() ORDER BY created DESC")
 RCA_MARKER = "automated rca"  # footer text on every verdict we post
 
 
