@@ -34,10 +34,12 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Pull latest code
+        run: git -C /home/rishabh/rca-claude-agent pull
 
       - name: Install / upgrade package
         run: /home/rishabh/rca-claude-agent/.venv/bin/pip install -e ".[live]"
+        working-directory: /home/rishabh/rca-claude-agent
 
       - name: Restart daemon
-        run: sudo systemctl restart rca-daemon
+        run: XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user restart rca-daemon
