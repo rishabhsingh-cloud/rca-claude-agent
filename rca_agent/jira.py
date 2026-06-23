@@ -53,7 +53,7 @@ class JiraClient:
     Implements the TicketSource protocol (`get(key) -> (key, text)`).
     """
 
-    _FIELDS = "summary,description,status,priority,issuetype,labels,comment"
+    _FIELDS = "summary,description,status,priority,issuetype,labels,comment,attachment"
 
     def __init__(self, base_url: str, email: str, token: str, timeout: float = 20.0):
         try:
@@ -90,6 +90,44 @@ class JiraClient:
         if r.status_code >= 400:
             raise JiraError(f"Jira {r.status_code} on search: {r.text[:200]}")
         return r.json().get("issues", [])
+
+    _IMAGE_TYPES = {"image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"}
+    _MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB per image
+    _MAX_IMAGES = 4                      # cap to avoid token explosion
+
+    def get_image_attachments(self, key: str) -> list[dict]:
+        """Return up to _MAX_IMAGES image attachments for a ticket.
+
+        Each entry: {filename, mimeType, content (base64 str)}.
+        Non-image attachments and images over _MAX_IMAGE_BYTES are skipped.
+        """
+        issue = self.get_issue(key)
+        attachments = issue.get("fields", {}).get("attachment") or []
+        results = []
+        for att in attachments:
+            mime = (att.get("mimeType") or "").lower()
+            if mime not in self._IMAGE_TYPES:
+                continue
+            size = att.get("size", 0)
+            if size > self._MAX_IMAGE_BYTES:
+                continue
+            url = att.get("content")
+            if not url:
+                continue
+            try:
+                r = self._client.get(url)
+                r.raise_for_status()
+                import base64 as _b64
+                results.append({
+                    "filename": att.get("filename", "attachment"),
+                    "mimeType": mime,
+                    "content": _b64.b64encode(r.content).decode(),
+                })
+            except Exception:
+                continue
+            if len(results) >= self._MAX_IMAGES:
+                break
+        return results
 
     def add_comment(self, key: str, text: str) -> dict:
         """Post a plain-text comment (write-back). NOT called automatically —

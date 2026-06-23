@@ -34,7 +34,8 @@ class AgentRunError(RuntimeError):
 
 async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClient,
                     settings: Settings, jira_mcp: bool = False,
-                    max_turns: int = 60) -> str:
+                    max_turns: int = 60,
+                    images: list[dict] | None = None) -> str:
     """Run one investigation through the agent loop; return its final text
     (expected to be the JSON verdict).
 
@@ -65,11 +66,27 @@ async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClie
         max_turns=max_turns,
     )
 
-    if ticket_text:
-        prompt = f"Investigate Jira ticket {ticket_key}. Ticket content:\n\n{ticket_text}"
+    text_part = (f"Investigate Jira ticket {ticket_key}. Ticket content:\n\n{ticket_text}"
+                 if ticket_text else
+                 f"Investigate Jira ticket {ticket_key}. Fetch it with "
+                 f"mcp__atlassian__getJiraIssue first, then analyze.")
+
+    if images:
+        img_note = (f"\n\nThe ticket also has {len(images)} screenshot(s) attached. "
+                    "Read them carefully — they may show the exact error dialog, "
+                    "UI state, or stack trace that caused the bug.")
+        prompt: list | str = [{"type": "text", "text": text_part + img_note}]
+        for img in images:
+            prompt.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": img["mimeType"],
+                    "data": img["content"],
+                },
+            })
     else:
-        prompt = (f"Investigate Jira ticket {ticket_key}. Fetch it with "
-                  f"mcp__atlassian__getJiraIssue first, then analyze.")
+        prompt = text_part
 
     final_text = ""
     try:
