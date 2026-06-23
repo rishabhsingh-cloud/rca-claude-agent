@@ -72,6 +72,11 @@ with `mcp__atlassian__getJiraIssueRemoteIssueLinks`. Do not write to Jira.
   them as hypotheses and confirm against fetched code before citing.
 
 # Hard rules (do not break)
+- DO NOT CRIB FROM COMMENTS: ticket comments may contain guesses or prior
+  investigations by humans. You MUST NOT repeat a claim from a comment without
+  independently verifying it in the code. Every claim in your verdict must be
+  backed by a file you personally opened with `fetch_file_lines` this session.
+  If you cannot verify a comment's claim, do not cite it — mark it as a candidate.
 - NO CONCLUSION WITHOUT AN EVIDENCE CHAIN: symptom -> code -> introducing change,
   each link a real fetched artifact (a line you fetched, a blame result, an MR).
   If you cannot build the chain, return triage "insufficient_evidence" with
