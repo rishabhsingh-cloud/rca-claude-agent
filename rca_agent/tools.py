@@ -24,8 +24,11 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 from .architecture import search_architecture as _search_arch
 from .gitlab_client import GitLabClient, GitLabError
 from .graph_store import load_repo_graph
+from .metrics import get_service_errors as _get_service_errors
+from .metrics import query_metrics as _query_metrics
 from .routing import read_summary as _read_summary
 from .routing import route_repo as _route_repo
+from .search import web_search as _web_search
 from .stack_trace import parse_stack_trace as _parse_trace
 
 
@@ -185,10 +188,40 @@ def build_rca_server(client: GitLabClient):
         return _ok({"summary": text} if text
                    else {"summary": None, "note": "no summary indexed for this repo"})
 
+    @tool("web_search",
+          "Search the web for an error message, library bug, or known issue. Use "
+          "when code search fails — e.g. the error comes from a third-party library, "
+          "a cloud provider outage, or a common framework bug. Returns top results "
+          "with snippets. Requires TAVILY_API_KEY — returns 'not configured' if absent.",
+          {"query": str, "max_results": int})
+    async def web_search(args):
+        return _ok(_web_search(args["query"], int(args.get("max_results") or 5)))
+
+    @tool("get_service_errors",
+          "Infra metrics shortcut: fetch HTTP 5xx rate, total error count, and pod "
+          "restart count for a service over the last N hours. Use to check if the "
+          "service was misbehaving around the time of the bug. Requires Grafana creds.",
+          {"service": str, "hours_ago": int})
+    async def get_service_errors(args):
+        return _ok(_get_service_errors(args["service"], int(args.get("hours_ago") or 2)))
+
+    @tool("query_metrics",
+          "Run a raw PromQL query against Grafana/Prometheus for the last N hours. "
+          "Use for custom metric lookups: latency p99, memory OOM, DB slow queries, "
+          "queue depth, etc. Requires GRAFANA_URL, GRAFANA_TOKEN, GRAFANA_PROM_UID.",
+          {"promql": str, "hours_ago": int, "step": str})
+    async def query_metrics(args):
+        return _ok(_query_metrics(
+            args["promql"],
+            int(args.get("hours_ago") or 1),
+            args.get("step") or "60s",
+        ))
+
     tools = [parse_stack_trace, route_repo, fetch_file_lines, git_blame,
              get_commit, merge_requests_for_commit,
              find_callers, find_dependents, get_subgraph, graph_has_edge,
-             search_symbols, search_code, search_architecture, get_repo_summary]
+             search_symbols, search_code, search_architecture, get_repo_summary,
+             web_search, get_service_errors, query_metrics]
     server = create_sdk_mcp_server(name="rca", version="0.1.0", tools=tools)
     tool_names = [
         "mcp__rca__parse_stack_trace",
@@ -205,5 +238,8 @@ def build_rca_server(client: GitLabClient):
         "mcp__rca__search_code",
         "mcp__rca__search_architecture",
         "mcp__rca__get_repo_summary",
+        "mcp__rca__web_search",
+        "mcp__rca__get_service_errors",
+        "mcp__rca__query_metrics",
     ]
     return server, tool_names

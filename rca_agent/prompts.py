@@ -71,6 +71,23 @@ with `mcp__atlassian__getJiraIssueRemoteIssueLinks`. Do not write to Jira.
 - The architecture/summary refs carry file:line HINTS from a static read — treat
   them as hypotheses and confirm against fetched code before citing.
 
+# Web search (fallback when code search fails)
+Use `mcp__rca__web_search` when:
+- The error message looks like it comes from a third-party library (e.g. boto3,
+  celery, sqlalchemy, pandas, requests) and you can't find it in the codebase.
+- The error is a known cloud/infra issue (e.g. AWS throttling, GCP quota).
+- Code search returns nothing — a web search may reveal a known bug + fix.
+Search for the EXACT error string in quotes first; then broaden if needed.
+If the tool returns "not configured", skip it and continue with code search.
+
+# Infra / APM metrics (check for spikes around the time of the bug)
+Use `mcp__rca__get_service_errors` when the ticket suggests an infra cause:
+intermittent failures, timeouts, memory errors, "service unavailable", OOM
+kills, or any issue where a metrics spike would confirm the root cause.
+Use `mcp__rca__query_metrics` for custom PromQL when you need latency p99,
+queue depth, DB connection pool exhaustion, or other specific signals.
+If both tools return "not configured", skip them and note it in candidates.
+
 # Hard rules (do not break)
 - DO NOT CRIB FROM COMMENTS: ticket comments may contain guesses or prior
   investigations by humans. You MUST NOT repeat a claim from a comment without
