@@ -28,6 +28,11 @@
   .refresh-btn { background: #0052cc; color: #fff; border: none; border-radius: 4px;
                  padding: 6px 12px; font-size: 12px; cursor: pointer; }
   .refresh-btn:hover { background: #0065ff; }
+  .filter-bar { padding: 10px 16px; border-bottom: 1px solid #dfe1e6; }
+  .filter-bar select { width: 100%; padding: 6px 8px; border: 1px solid #dfe1e6;
+                       border-radius: 4px; font-size: 13px; color: #172b4d;
+                       background: #fff; cursor: pointer; }
+  .filter-bar select:focus { outline: none; border-color: #0052cc; }
   .ticket-list { overflow-y: auto; flex: 1; }
   .ticket-item { padding: 12px 16px; border-bottom: 1px solid #f4f5f7; cursor: pointer;
                  transition: background .15s; }
@@ -136,6 +141,14 @@
       <span>This Month's Bugs</span>
       <button class="refresh-btn" onclick="loadTickets()">Refresh</button>
     </div>
+    <div class="filter-bar">
+      <select id="projectFilter" onchange="renderTicketList()">
+        <option value="">All Spaces</option>
+        <option value="AUT">AUT</option>
+        <option value="EE">EE</option>
+        <option value="DEVOPS">DEVOPS</option>
+      </select>
+    </div>
     <div class="ticket-list" id="ticketList">
       <div style="padding:16px;color:#5e6c84;font-size:13px;">Loading tickets...</div>
     </div>
@@ -169,11 +182,13 @@ async function loadTickets() {
 
 function renderTicketList() {
   const el = document.getElementById('ticketList');
-  if (!tickets.length) {
-    el.innerHTML = '<div style="padding:16px;color:#5e6c84;font-size:13px;">No tickets this month</div>';
+  const project = document.getElementById('projectFilter').value;
+  const filtered = project ? tickets.filter(t => t.key.startsWith(project + '-')) : tickets;
+  if (!filtered.length) {
+    el.innerHTML = '<div style="padding:16px;color:#5e6c84;font-size:13px;">No tickets found</div>';
     return;
   }
-  el.innerHTML = tickets.map((t, i) => `
+  el.innerHTML = filtered.map((t, i) => `
     <div class="ticket-item ${t.key === currentKey ? 'active' : ''}" onclick="selectTicket('${t.key}')">
       <div class="key">${t.key}</div>
       <div class="summary">${escHtml(t.title || '')}</div>
