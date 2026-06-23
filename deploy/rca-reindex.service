@@ -1,0 +1,12 @@
+[Unit]
+Description=RCA nightly re-indexer (one-shot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/rishabh/rca-claude-agent
+EnvironmentFile=/home/rishabh/rca-claude-agent/.env
+ExecStart=/home/rishabh/rca-claude-agent/.venv/bin/python3 -m rca_agent.reindex
+StandardOutput=journal
+StandardError=journal

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run RCA re-indexer every 2 nights at 02:00
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+AccuracySec=10min
+
+[Install]
+WantedBy=timers.target
