@@ -100,11 +100,11 @@ def normalize_jira_issue(issue: dict, drop_rca_comments: bool = False) -> tuple[
     comments = (comment_field.get("comments") if isinstance(comment_field, dict)
                 else fields.get("comments")) or []
     for c in comments:
-        if drop_rca_comments:
-            continue  # drop all comments — agent reads title + description only
         author = _name(c.get("author"))
         body = c.get("body")
         body_text = flatten_adf(body) if isinstance(body, dict) else (body or "")
+        if drop_rca_comments and any(m in body_text.lower() for m in _RCA_COMMENT_MARKERS):
+            continue
         parts.append(f"\n--- comment by {author or '?'} ---\n{body_text.rstrip()}")
 
     return key, "\n".join(parts)
