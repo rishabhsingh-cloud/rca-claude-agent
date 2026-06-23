@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RCA Review</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: #f4f5f7; color: #172b4d; height: 100vh; display: flex;
+         flex-direction: column; }
+
+  /* Top bar */
+  .topbar { background: #0052cc; color: #fff; padding: 12px 24px;
+            display: flex; align-items: center; justify-content: space-between; }
+  .topbar h1 { font-size: 18px; font-weight: 600; }
+  .topbar .score { font-size: 13px; opacity: .85; }
+
+  /* Layout */
+  .layout { display: flex; flex: 1; overflow: hidden; }
+
+  /* Left panel */
+  .sidebar { width: 280px; background: #fff; border-right: 1px solid #dfe1e6;
+             display: flex; flex-direction: column; }
+  .sidebar-header { padding: 14px 16px; border-bottom: 1px solid #dfe1e6;
+                    display: flex; align-items: center; justify-content: space-between; }
+  .sidebar-header span { font-size: 13px; font-weight: 600; color: #5e6c84; }
+  .refresh-btn { background: #0052cc; color: #fff; border: none; border-radius: 4px;
+                 padding: 6px 12px; font-size: 12px; cursor: pointer; }
+  .refresh-btn:hover { background: #0065ff; }
+  .ticket-list { overflow-y: auto; flex: 1; }
+  .ticket-item { padding: 12px 16px; border-bottom: 1px solid #f4f5f7; cursor: pointer;
+                 transition: background .15s; }
+  .ticket-item:hover { background: #f4f5f7; }
+  .ticket-item.active { background: #e6efff; border-left: 3px solid #0052cc; }
+  .ticket-item .key { font-size: 12px; font-weight: 600; color: #0052cc; }
+  .ticket-item .summary { font-size: 13px; color: #172b4d; margin-top: 2px;
+                          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ticket-item .badge { display: inline-block; margin-top: 4px; padding: 2px 7px;
+                        border-radius: 10px; font-size: 11px; font-weight: 500; }
+  .badge.pending   { background: #f4f5f7; color: #5e6c84; }
+  .badge.rca_ready { background: #fff0b3; color: #974f0c; }
+  .badge.accepted  { background: #e3fcef; color: #006644; }
+  .badge.rejected  { background: #ffebe6; color: #bf2600; }
+
+  /* Right panel */
+  .detail { flex: 1; overflow-y: auto; padding: 24px; display: flex;
+            flex-direction: column; gap: 16px; }
+  .empty-state { flex: 1; display: flex; align-items: center; justify-content: center;
+                 color: #5e6c84; font-size: 15px; }
+
+  .card { background: #fff; border-radius: 6px; border: 1px solid #dfe1e6; padding: 18px; }
+  .card h3 { font-size: 13px; font-weight: 600; color: #5e6c84; margin-bottom: 8px;
+             text-transform: uppercase; letter-spacing: .5px; }
+  .card .value { font-size: 15px; color: #172b4d; line-height: 1.5; white-space: pre-wrap; }
+
+  /* RCA panel */
+  .rca-card { background: #fff; border-radius: 6px; border: 1px solid #dfe1e6; padding: 18px; }
+  .rca-card h3 { font-size: 13px; font-weight: 600; color: #5e6c84; margin-bottom: 12px;
+                 text-transform: uppercase; letter-spacing: .5px;
+                 display: flex; align-items: center; justify-content: space-between; }
+  .rca-content { font-size: 14px; line-height: 1.6; color: #172b4d; white-space: pre-wrap; }
+  .rca-placeholder { color: #5e6c84; font-size: 14px; font-style: italic; }
+
+  .confidence { display: inline-block; padding: 3px 10px; border-radius: 12px;
+                font-size: 12px; font-weight: 600; }
+  .confidence.high   { background: #e3fcef; color: #006644; }
+  .confidence.medium { background: #fff0b3; color: #974f0c; }
+  .confidence.low    { background: #ffebe6; color: #bf2600; }
+
+  /* Run RCA button */
+  .run-btn { background: #0052cc; color: #fff; border: none; border-radius: 4px;
+             padding: 10px 20px; font-size: 14px; font-weight: 500; cursor: pointer;
+             display: flex; align-items: center; gap: 8px; }
+  .run-btn:hover { background: #0065ff; }
+  .run-btn:disabled { background: #a5adba; cursor: not-allowed; }
+
+  /* Actions */
+  .actions { display: flex; gap: 12px; flex-wrap: wrap; }
+  .accept-btn { background: #006644; color: #fff; border: none; border-radius: 4px;
+                padding: 10px 24px; font-size: 14px; font-weight: 500; cursor: pointer; }
+  .accept-btn:hover { background: #00875a; }
+  .reject-btn { background: #fff; color: #bf2600; border: 2px solid #bf2600;
+                border-radius: 4px; padding: 10px 24px; font-size: 14px;
+                font-weight: 500; cursor: pointer; }
+  .reject-btn:hover { background: #ffebe6; }
+  .accept-btn:disabled, .reject-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* Human RCA box */
+  .human-rca-box { display: none; flex-direction: column; gap: 10px; }
+  .human-rca-box.show { display: flex; }
+  .human-rca-box textarea { width: 100%; min-height: 120px; padding: 10px;
+                             border: 1px solid #dfe1e6; border-radius: 4px;
+                             font-size: 14px; font-family: inherit; resize: vertical; }
+  .post-human-btn { background: #bf2600; color: #fff; border: none; border-radius: 4px;
+                    padding: 10px 20px; font-size: 14px; font-weight: 500; cursor: pointer;
+                    align-self: flex-start; }
+  .post-human-btn:hover { background: #de350b; }
+
+  /* Scoreboard */
+  .scoreboard { background: #fff; border-radius: 6px; border: 1px solid #dfe1e6;
+                padding: 18px; }
+  .scoreboard h3 { font-size: 13px; font-weight: 600; color: #5e6c84; margin-bottom: 14px;
+                   text-transform: uppercase; letter-spacing: .5px; }
+  .score-grid { display: flex; gap: 24px; flex-wrap: wrap; }
+  .score-item { text-align: center; }
+  .score-item .num { font-size: 28px; font-weight: 700; color: #172b4d; }
+  .score-item .label { font-size: 12px; color: #5e6c84; margin-top: 2px; }
+  .score-bar { margin-top: 14px; }
+  .score-bar .bar-track { background: #f4f5f7; border-radius: 6px; height: 10px; }
+  .score-bar .bar-fill  { background: #36b37e; border-radius: 6px; height: 10px;
+                          transition: width .4s; }
+  .score-bar .bar-label { font-size: 12px; color: #5e6c84; margin-top: 4px; }
+
+  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #fff;
+             border-top-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .toast { position: fixed; bottom: 24px; right: 24px; background: #172b4d; color: #fff;
+           padding: 12px 20px; border-radius: 6px; font-size: 14px; z-index: 999;
+           display: none; }
+  .toast.show { display: block; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>RCA Review Dashboard</h1>
+  <span class="score" id="topScore">Loading scoreboard...</span>
+</div>
+
+<div class="layout">
+  <!-- Left: ticket list -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <span>This Month's Bugs</span>
+      <button class="refresh-btn" onclick="loadTickets()">Refresh</button>
+    </div>
+    <div class="ticket-list" id="ticketList">
+      <div style="padding:16px;color:#5e6c84;font-size:13px;">Loading tickets...</div>
+    </div>
+  </div>
+
+  <!-- Right: detail -->
+  <div class="detail" id="detail">
+    <div class="empty-state">Select a ticket to review</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let currentKey = null;
+let tickets = [];
+
+async function loadTickets() {
+  document.getElementById('ticketList').innerHTML =
+    '<div style="padding:16px;color:#5e6c84;font-size:13px;">Refreshing...</div>';
+  try {
+    const res = await fetch('/api/tickets');
+    tickets = await res.json();
+    renderTicketList();
+    loadScoreboard();
+  } catch(e) {
+    document.getElementById('ticketList').innerHTML =
+      '<div style="padding:16px;color:#bf2600;font-size:13px;">Failed to load tickets</div>';
+  }
+}
+
+function renderTicketList() {
+  const el = document.getElementById('ticketList');
+  if (!tickets.length) {
+    el.innerHTML = '<div style="padding:16px;color:#5e6c84;font-size:13px;">No tickets this month</div>';
+    return;
+  }
+  el.innerHTML = tickets.map((t, i) => `
+    <div class="ticket-item ${t.key === currentKey ? 'active' : ''}" onclick="selectTicket('${t.key}')">
+      <div class="key">${t.key}</div>
+      <div class="summary">${escHtml(t.title || '')}</div>
+      <span class="badge ${t.status}">${t.status.replace('_', ' ')}</span>
+    </div>
+  `).join('');
+}
+
+async function selectTicket(key) {
+  currentKey = key;
+  renderTicketList();
+  const ticket = tickets.find(t => t.key === key);
+  if (!ticket) return;
+
+  const alreadyDone = ticket.status === 'accepted' || ticket.status === 'rejected';
+  const hasRca = ticket.bot_rca_json || ticket.status === 'rca_ready';
+
+  document.getElementById('detail').innerHTML = `
+    <div class="card">
+      <h3>Ticket</h3>
+      <div class="value" style="font-size:18px;font-weight:600;">${escHtml(ticket.key)} — ${escHtml(ticket.title||'')}</div>
+    </div>
+
+    <div class="card">
+      <h3>Description</h3>
+      <div class="value">${escHtml(ticket.description || 'No description provided.')}</div>
+    </div>
+
+    <div class="rca-card" id="rcaCard">
+      <h3>
+        <span>Bot RCA</span>
+        <span style="display:flex;gap:8px;align-items:center;">
+          ${ticket.bot_rca_json ? `<span class="confidence ${JSON.parse(ticket.bot_rca_json).confidence}">${JSON.parse(ticket.bot_rca_json).confidence.toUpperCase()}</span>` : ''}
+          ${ticket.status === 'rca_ready' ? `<button onclick="rerunRca('${ticket.key}')" style="background:none;border:1px solid #dfe1e6;border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;color:#5e6c84;">↺ Re-run</button>` : ''}
+        </span>
+      </h3>
+      <div id="rcaContent">
+        ${renderRcaContent(ticket)}
+      </div>
+    </div>
+
+    ${!alreadyDone ? `
+    <div class="actions" id="actions">
+      <button class="accept-btn" id="acceptBtn" onclick="acceptRca()" ${!hasRca ? 'disabled' : ''}>
+        ✓ Accept &amp; Post to Jira
+      </button>
+      <button class="reject-btn" id="rejectBtn" onclick="showHumanRca()" ${!hasRca ? 'disabled' : ''}>
+        ✗ Reject — Write Human RCA
+      </button>
+    </div>
+
+    <div class="human-rca-box" id="humanRcaBox">
+      <div class="card" style="margin:0;">
+        <h3>Your RCA</h3>
+        <textarea id="humanRcaText" placeholder="Describe the root cause in your own words..."></textarea>
+        <div style="margin-top:10px;">
+          <button class="post-human-btn" onclick="postHumanRca()">Post Human RCA to Jira</button>
+        </div>
+      </div>
+    </div>
+    ` : `
+    <div class="card" style="border-color:${ticket.status==='accepted'?'#36b37e':'#ff5630'}">
+      <h3>${ticket.status === 'accepted' ? '✓ Accepted' : '✗ Rejected — Human RCA posted'}</h3>
+      ${ticket.human_rca ? `<div class="value">${escHtml(ticket.human_rca)}</div>` : ''}
+    </div>
+    `}
+
+    <div class="scoreboard">
+      <h3>Accuracy Scoreboard</h3>
+      <div id="scoreboardContent">Loading...</div>
+    </div>
+  `;
+
+  loadScoreboard();
+}
+
+function renderRcaContent(ticket) {
+  if (ticket.bot_rca_json) {
+    const v = JSON.parse(ticket.bot_rca_json);
+    let html = '';
+    if (v.confidence === 'low') {
+      html += `<p style="color:#bf2600;font-weight:600;margin-bottom:8px;">⚠️ Low Confidence — Starting point only</p>`;
+    }
+    if (v.headline) html += `<p style="font-weight:600;margin-bottom:6px;">${escHtml(v.headline)}</p>`;
+    if (v.plain_summary) html += `<p style="margin-bottom:10px;">${escHtml(v.plain_summary)}</p>`;
+    html += `<p style="color:#5e6c84;font-size:13px;">${escHtml(v.probable_root_cause)}</p>`;
+    if (v.suggested_next_action) {
+      html += `<p style="margin-top:10px;font-size:13px;"><strong>Next:</strong> ${escHtml(v.suggested_next_action)}</p>`;
+    }
+    if (v.evidence_chain && v.evidence_chain.length) {
+      html += `<details style="margin-top:12px;"><summary style="cursor:pointer;font-size:13px;color:#0052cc;">Evidence trail (${v.evidence_chain.length} items)</summary><div style="margin-top:8px;">`;
+      v.evidence_chain.forEach((e, i) => {
+        html += `<div style="margin-bottom:8px;font-size:13px;">
+          <strong>${i+1}. [${e.kind}]</strong> ${escHtml(e.detail)}<br>
+          ${e.url ? `<a href="${e.url}" target="_blank" style="color:#0052cc;">${escHtml(e.ref)}</a>` : escHtml(e.ref)}
+        </div>`;
+      });
+      html += '</div></details>';
+    }
+    return html;
+  }
+  if (ticket.status === 'pending') {
+    return `<div style="display:flex;flex-direction:column;gap:12px;align-items:flex-start;">
+      <p class="rca-placeholder">RCA has not been run yet for this ticket.</p>
+      <button class="run-btn" onclick="runRca('${ticket.key}')" id="runRcaBtn">
+        <span>▶ Run RCA</span>
+      </button>
+    </div>`;
+  }
+  return '<p class="rca-placeholder">Running...</p>';
+}
+
+async function runRca(key) {
+  const btn = document.getElementById('runRcaBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Investigating...';
+  }
+  document.getElementById('rcaContent').innerHTML =
+    '<p style="color:#5e6c84;font-size:14px;font-style:italic;">⏳ Agent is investigating the codebase... this takes 1-3 minutes.</p>';
+  try {
+    const res = await fetch(`/api/tickets/${key}/rca`, {method:'POST'});
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    const idx = tickets.findIndex(t => t.key === key);
+    if (idx !== -1) {
+      tickets[idx].bot_rca_json = JSON.stringify(data.verdict);
+      tickets[idx].status = 'rca_ready';
+    }
+    selectTicket(key);
+    renderTicketList();
+  } catch(e) {
+    document.getElementById('rcaContent').innerHTML =
+      `<p style="color:#bf2600;">Failed: ${escHtml(String(e))}</p>
+       <button class="run-btn" onclick="runRca('${key}')" style="margin-top:10px;">Retry</button>`;
+  }
+}
+
+async function rerunRca(key) {
+  await fetch(`/api/tickets/${key}/reset`, {method:'POST'});
+  const idx = tickets.findIndex(t => t.key === key);
+  if (idx !== -1) { tickets[idx].status = 'pending'; tickets[idx].bot_rca_json = null; }
+  selectTicket(key);
+  renderTicketList();
+  await runRca(key);
+}
+
+async function acceptRca() {
+  setActionBtns(true);
+  try {
+    const res = await fetch(`/api/tickets/${currentKey}/accept`, {method:'POST'});
+    if (!res.ok) throw new Error(await res.text());
+    const idx = tickets.findIndex(t => t.key === currentKey);
+    if (idx !== -1) tickets[idx].status = 'accepted';
+    showToast('✓ RCA posted to Jira');
+    selectTicket(currentKey);
+    renderTicketList();
+    loadScoreboard();
+  } catch(e) {
+    showToast('Error: ' + e.message, true);
+    setActionBtns(false);
+  }
+}
+
+function showHumanRca() {
+  document.getElementById('humanRcaBox').classList.add('show');
+  document.getElementById('humanRcaText').focus();
+}
+
+async function postHumanRca() {
+  const text = document.getElementById('humanRcaText').value.trim();
+  if (!text) { showToast('Please write your RCA first', true); return; }
+  try {
+    const res = await fetch(`/api/tickets/${currentKey}/reject`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({human_rca: text})
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const idx = tickets.findIndex(t => t.key === currentKey);
+    if (idx !== -1) { tickets[idx].status = 'rejected'; tickets[idx].human_rca = text; }
+    showToast('Human RCA posted to Jira');
+    selectTicket(currentKey);
+    renderTicketList();
+    loadScoreboard();
+  } catch(e) {
+    showToast('Error: ' + e.message, true);
+  }
+}
+
+async function loadScoreboard() {
+  try {
+    const res = await fetch('/api/scoreboard');
+    const s = await res.json();
+    const pct = s.total ? Math.round(s.accepted / s.total * 100) : 0;
+    const rateStr = s.total ? `${s.rate}/10` : '—';
+    document.getElementById('topScore').textContent =
+      `Acceptance rate: ${rateStr} (goal: 9/10)`;
+    const el = document.getElementById('scoreboardContent');
+    if (el) el.innerHTML = `
+      <div class="score-grid">
+        <div class="score-item"><div class="num">${s.total}</div><div class="label">Reviewed</div></div>
+        <div class="score-item"><div class="num" style="color:#006644">${s.accepted}</div><div class="label">Accepted</div></div>
+        <div class="score-item"><div class="num" style="color:#bf2600">${s.rejected}</div><div class="label">Rejected</div></div>
+        <div class="score-item"><div class="num" style="color:#0052cc">${rateStr}</div><div class="label">Score / 10</div></div>
+      </div>
+      <div class="score-bar" style="margin-top:16px;">
+        <div class="bar-track"><div class="bar-fill" style="width:${Math.min(pct,100)}%"></div></div>
+        <div class="bar-label">${pct}% accepted — goal: 90%</div>
+      </div>
+    `;
+  } catch(e) {}
+}
+
+function setActionBtns(disabled) {
+  const a = document.getElementById('acceptBtn');
+  const r = document.getElementById('rejectBtn');
+  if (a) a.disabled = disabled;
+  if (r) r.disabled = disabled;
+}
+
+function showToast(msg, isError) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.background = isError ? '#bf2600' : '#172b4d';
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+loadTickets();
+</script>
+</body>
+</html>

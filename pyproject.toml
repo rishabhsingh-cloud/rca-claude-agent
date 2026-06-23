@@ -12,6 +12,7 @@ dependencies = [
 # Live GitLab backend (RestGitLabClient). The mock path needs neither.
 live = ["httpx>=0.27"]
 dev = ["pytest>=8.0", "httpx>=0.27"]
+webapp = ["httpx>=0.27", "fastapi>=0.111", "uvicorn>=0.29"]
 
 [project.scripts]
 rca = "rca_agent.run:main"
@@ -21,4 +22,4 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["rca_agent"]
+packages = ["rca_agent", "rca_agent.webapp"]
