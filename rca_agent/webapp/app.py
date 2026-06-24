@@ -91,6 +91,16 @@ async def run_rca(key: str):
         raise HTTPException(500, str(e))
 
 
+@app.get("/api/tickets/{key}/attachments")
+def get_attachments(key: str):
+    """Fetch images and PDFs attached to a Jira ticket."""
+    jira = _jira()
+    try:
+        return jira.get_all_attachments(key)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 @app.post("/api/tickets/{key}/reset")
 def reset_rca(key: str):
     """Clear stored RCA so it can be re-run."""

@@ -112,6 +112,27 @@
                           transition: width .4s; }
   .score-bar .bar-label { font-size: 12px; color: #5e6c84; margin-top: 4px; }
 
+  /* Attachments */
+  .attachments-card { background: #fff; border-radius: 6px; border: 1px solid #dfe1e6; padding: 18px; }
+  .attachments-card h3 { font-size: 13px; font-weight: 600; color: #5e6c84; margin-bottom: 12px;
+                         text-transform: uppercase; letter-spacing: .5px; }
+  .att-images { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+  .att-images img { max-width: 280px; max-height: 200px; border-radius: 4px;
+                    border: 1px solid #dfe1e6; cursor: pointer; object-fit: contain; }
+  .att-images img:hover { border-color: #0052cc; }
+  .att-pdf { margin-bottom: 10px; }
+  .att-pdf summary { cursor: pointer; font-size: 13px; font-weight: 500; color: #0052cc;
+                     padding: 6px 0; }
+  .att-pdf pre { background: #f4f5f7; border-radius: 4px; padding: 10px; font-size: 12px;
+                 white-space: pre-wrap; word-break: break-word; max-height: 300px;
+                 overflow-y: auto; margin-top: 6px; }
+
+  /* Lightbox */
+  .lightbox { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.8);
+              z-index: 1000; align-items: center; justify-content: center; cursor: zoom-out; }
+  .lightbox.show { display: flex; }
+  .lightbox img { max-width: 90vw; max-height: 90vh; border-radius: 6px; }
+
   .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #fff;
              border-top-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -157,6 +178,9 @@
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="lightbox" id="lightbox" onclick="this.classList.remove('show')">
+  <img id="lightboxImg" src="" alt="">
+</div>
 
 <script>
 let currentKey = null;
@@ -258,6 +282,43 @@ async function selectTicket(key) {
   `;
 
   loadScoreboard();
+  loadAttachments(key);
+}
+
+async function loadAttachments(key) {
+  try {
+    const res = await fetch(`/api/tickets/${key}/attachments`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const images = data.images || [];
+    const pdfs = data.pdfs || [];
+    if (!images.length && !pdfs.length) return;
+
+    const card = document.createElement('div');
+    card.className = 'attachments-card';
+    card.innerHTML = `<h3>Attachments (${images.length + pdfs.length})</h3>
+      ${images.length ? `<div class="att-images">${images.map(img =>
+        `<img src="data:${img.mimeType};base64,${img.content}"
+              alt="${escHtml(img.filename)}"
+              title="${escHtml(img.filename)}"
+              onclick="openLightbox(this.src)">`
+      ).join('')}</div>` : ''}
+      ${pdfs.map(pdf => `
+        <details class="att-pdf">
+          <summary>📄 ${escHtml(pdf.filename)}</summary>
+          <pre>${escHtml(pdf.text)}</pre>
+        </details>`).join('')}`;
+
+    const detail = document.getElementById('detail');
+    const descCard = detail.querySelectorAll('.card')[1];
+    if (descCard) descCard.after(card);
+    else detail.prepend(card);
+  } catch(e) {}
+}
+
+function openLightbox(src) {
+  document.getElementById('lightboxImg').src = src;
+  document.getElementById('lightbox').classList.add('show');
 }
 
 function renderRcaContent(ticket) {
