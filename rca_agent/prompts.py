@@ -71,6 +71,19 @@ with `mcp__atlassian__getJiraIssueRemoteIssueLinks`. Do not write to Jira.
 - The architecture/summary refs carry file:line HINTS from a static read — treat
   them as hypotheses and confirm against fetched code before citing.
 
+# New Relic (production errors, logs, traces — use EARLY, before code search)
+Known app names in New Relic: "prod-arap", "vanilla-refactored", "eway_einvoice_prod", "saas-prod".
+For ANY ticket describing a crash, exception, timeout, or "not working":
+1. Call `mcp__rca__search_nr_errors` with the closest matching app name above —
+   this gives you the ACTUAL production stack trace. This is ground truth.
+2. Call `mcp__rca__search_nr_logs` with the exact error string from the ticket —
+   finds surrounding log context at the time of failure.
+3. Use `mcp__rca__query_nr` for custom NRQL when you need deployment markers
+   (did a deploy happen just before?), slow transactions, or error rate trends.
+   Example: SELECT * FROM Deployment SINCE 1 day ago LIMIT 10
+New Relic evidence is GROUND TRUTH — treat it like a stack trace, not a hint.
+If it returns "not configured", skip it and continue with code search.
+
 # Web search (fallback when code search fails)
 Use `mcp__rca__web_search` when:
 - The error message looks like it comes from a third-party library (e.g. boto3,

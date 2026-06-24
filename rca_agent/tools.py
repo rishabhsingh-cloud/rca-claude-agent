@@ -26,6 +26,9 @@ from .gitlab_client import GitLabClient, GitLabError
 from .graph_store import load_repo_graph
 from .metrics import get_service_errors as _get_service_errors
 from .metrics import query_metrics as _query_metrics
+from .newrelic import query_nr as _query_nr
+from .newrelic import search_nr_errors as _search_nr_errors
+from .newrelic import search_nr_logs as _search_nr_logs
 from .routing import read_summary as _read_summary
 from .routing import route_repo as _route_repo
 from .search import web_search as _web_search
@@ -217,11 +220,37 @@ def build_rca_server(client: GitLabClient):
             args.get("step") or "60s",
         ))
 
+    @tool("search_nr_errors",
+          "Search New Relic APM for recent TransactionErrors for a service. "
+          "Returns production stack traces, error class, message, and count. "
+          "Use when the ticket describes an exception or crash — this gives you "
+          "the actual production trace without needing server access.",
+          {"service": str, "hours_ago": int})
+    async def search_nr_errors(args):
+        return _ok(_search_nr_errors(args["service"], int(args.get("hours_ago") or 2)))
+
+    @tool("search_nr_logs",
+          "Search New Relic logs for a keyword or error string. "
+          "Returns matching log lines with timestamp, service, and severity. "
+          "Use to find what was happening on the server at the time of the bug.",
+          {"query": str, "hours_ago": int})
+    async def search_nr_logs(args):
+        return _ok(_search_nr_logs(args["query"], int(args.get("hours_ago") or 2)))
+
+    @tool("query_nr",
+          "Run a raw NRQL query against New Relic for custom lookups: slow "
+          "transactions, error rates, deployments, throughput drops, custom events. "
+          "Use when the shortcuts above don't cover what you need.",
+          {"nrql": str})
+    async def query_nr(args):
+        return _ok(_query_nr(args["nrql"]))
+
     tools = [parse_stack_trace, route_repo, fetch_file_lines, git_blame,
              get_commit, merge_requests_for_commit,
              find_callers, find_dependents, get_subgraph, graph_has_edge,
              search_symbols, search_code, search_architecture, get_repo_summary,
-             web_search, get_service_errors, query_metrics]
+             web_search, get_service_errors, query_metrics,
+             search_nr_errors, search_nr_logs, query_nr]
     server = create_sdk_mcp_server(name="rca", version="0.1.0", tools=tools)
     tool_names = [
         "mcp__rca__parse_stack_trace",
@@ -241,5 +270,8 @@ def build_rca_server(client: GitLabClient):
         "mcp__rca__web_search",
         "mcp__rca__get_service_errors",
         "mcp__rca__query_metrics",
+        "mcp__rca__search_nr_errors",
+        "mcp__rca__search_nr_logs",
+        "mcp__rca__query_nr",
     ]
     return server, tool_names
