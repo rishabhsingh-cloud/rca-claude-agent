@@ -67,11 +67,6 @@
   .rca-content { font-size: 14px; line-height: 1.6; color: #172b4d; white-space: pre-wrap; }
   .rca-placeholder { color: #5e6c84; font-size: 14px; font-style: italic; }
 
-  .confidence { display: inline-block; padding: 3px 10px; border-radius: 12px;
-                font-size: 12px; font-weight: 600; }
-  .confidence.high   { background: #e3fcef; color: #006644; }
-  .confidence.medium { background: #fff0b3; color: #974f0c; }
-  .confidence.low    { background: #ffebe6; color: #bf2600; }
 
   /* Run RCA button */
   .run-btn { background: #0052cc; color: #fff; border: none; border-radius: 4px;
@@ -221,7 +216,6 @@ async function selectTicket(key) {
       <h3>
         <span>Bot RCA</span>
         <span style="display:flex;gap:8px;align-items:center;">
-          ${ticket.bot_rca_json ? `<span class="confidence ${JSON.parse(ticket.bot_rca_json).confidence}">${JSON.parse(ticket.bot_rca_json).confidence.toUpperCase()}</span>` : ''}
           ${ticket.status === 'rca_ready' ? `<button onclick="rerunRca('${ticket.key}')" style="background:none;border:1px solid #dfe1e6;border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;color:#5e6c84;">↺ Re-run</button>` : ''}
         </span>
       </h3>
@@ -269,9 +263,6 @@ function renderRcaContent(ticket) {
   if (ticket.bot_rca_json) {
     const v = JSON.parse(ticket.bot_rca_json);
     let html = '';
-    if (v.confidence === 'low') {
-      html += `<p style="color:#bf2600;font-weight:600;margin-bottom:8px;">⚠️ Low Confidence — Starting point only</p>`;
-    }
     if (v.headline) html += `<p style="font-weight:600;margin-bottom:6px;">${escHtml(v.headline)}</p>`;
     if (v.plain_summary) html += `<p style="margin-bottom:10px;">${escHtml(v.plain_summary)}</p>`;
     html += `<p style="color:#5e6c84;font-size:13px;">${escHtml(v.probable_root_cause)}</p>`;

@@ -76,12 +76,15 @@ class JiraClient:
             raise JiraError(f"Jira {r.status_code} on {key}: {r.text[:200]}")
         return r.json()
 
-    def get(self, key: str, drop_rca_comments: bool = True) -> tuple[str, str]:
+    def get(self, key: str, drop_rca_comments: bool = True,
+            drop_all_comments: bool = False) -> tuple[str, str]:
         """TicketSource: fetch issue and normalize to (key, ticket_text).
 
-        Prior automated-RCA comments are dropped by default so the agent can't
-        crib an earlier answer when re-investigating a ticket."""
-        return normalize_jira_issue(self.get_issue(key), drop_rca_comments=drop_rca_comments)
+        With drop_all_comments=True, no comments are passed to the agent so it
+        investigates independently without being influenced by prior human guesses."""
+        return normalize_jira_issue(self.get_issue(key),
+                                    drop_rca_comments=drop_rca_comments,
+                                    drop_all_comments=drop_all_comments)
 
     def search(self, jql: str, max_results: int = 50) -> list[dict]:
         ep = f"{self._base}/search/jql"

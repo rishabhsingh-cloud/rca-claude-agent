@@ -73,12 +73,15 @@ def _name(obj) -> str:
 _RCA_COMMENT_MARKERS = ("automated rca", "verify before acting", "verified against code")
 
 
-def normalize_jira_issue(issue: dict, drop_rca_comments: bool = False) -> tuple[str, str]:
+def normalize_jira_issue(issue: dict, drop_rca_comments: bool = False,
+                         drop_all_comments: bool = False) -> tuple[str, str]:
     """Normalize a raw Atlassian `getJiraIssue` payload to (key, ticket_text).
 
     Tolerates both the Jira-REST shape (`fields.*`, description/comment bodies as
     ADF) and an already-flattened shape (top-level string fields). With
-    `drop_rca_comments`, prior automated-RCA comments are skipped (fair re-runs).
+    `drop_all_comments`, all comments are excluded so the agent investigates
+    independently without being influenced by prior human guesses.
+    With `drop_rca_comments`, only prior automated-RCA comments are skipped.
     """
     key = issue.get("key") or issue.get("id") or "UNKNOWN"
     fields = issue.get("fields", issue)
@@ -96,16 +99,17 @@ def normalize_jira_issue(issue: dict, drop_rca_comments: bool = False) -> tuple[
         desc_text.rstrip(),
     ]
 
-    comment_field = fields.get("comment")
-    comments = (comment_field.get("comments") if isinstance(comment_field, dict)
-                else fields.get("comments")) or []
-    for c in comments:
-        author = _name(c.get("author"))
-        body = c.get("body")
-        body_text = flatten_adf(body) if isinstance(body, dict) else (body or "")
-        if drop_rca_comments and any(m in body_text.lower() for m in _RCA_COMMENT_MARKERS):
-            continue
-        parts.append(f"\n--- comment by {author or '?'} ---\n{body_text.rstrip()}")
+    if not drop_all_comments:
+        comment_field = fields.get("comment")
+        comments = (comment_field.get("comments") if isinstance(comment_field, dict)
+                    else fields.get("comments")) or []
+        for c in comments:
+            author = _name(c.get("author"))
+            body = c.get("body")
+            body_text = flatten_adf(body) if isinstance(body, dict) else (body or "")
+            if drop_rca_comments and any(m in body_text.lower() for m in _RCA_COMMENT_MARKERS):
+                continue
+            parts.append(f"\n--- comment by {author or '?'} ---\n{body_text.rstrip()}")
 
     return key, "\n".join(parts)
 

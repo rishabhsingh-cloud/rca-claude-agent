@@ -65,7 +65,7 @@ async def run_rca(key: str):
     jira = _jira()
     client = build_client(s)
     try:
-        tkey, text = jira.get(key, drop_rca_comments=True)
+        tkey, text = jira.get(key, drop_all_comments=True)
         images = jira.get_image_attachments(key)
         # Run in a thread with its own event loop — fixes Windows asyncio subprocess issue
         loop = asyncio.get_event_loop()

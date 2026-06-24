@@ -187,28 +187,14 @@ def _adf_para(*nodes) -> dict:
 def verdict_to_adf(v: Verdict) -> dict:
     """Render a verdict as a Jira ADF comment: a short, scannable summary up top
     and the full evidence trail tucked inside a collapsible 'RCA details' block.
-    QA reads 3 lines; anyone who wants proof expands it.
-    LOW confidence gets a disclaimer but still shows the best partial finding."""
-    status = (f"Confidence {v.confidence.value.upper()} · {v.triage.value} · "
-              f"regression {_regression_str(v)}")
+    QA reads 3 lines; anyone who wants proof expands it."""
+    status = f"{v.triage.value} · regression {_regression_str(v)}"
 
-    if v.confidence is Confidence.LOW:
-        visible = [
-            _adf_para(_adf_text("⚠️ Low Confidence — Treat as a starting point only",
-                                [{"type": "strong"}])),
-            _adf_para(_adf_text(
-                "The agent investigated this ticket but could not pinpoint the root cause "
-                "with enough certainty. The finding below is its best guess — use it to "
-                "guide manual investigation, not as a confirmed diagnosis.")),
-            _adf_para(_adf_text(v.probable_root_cause, [{"type": "em"}])),
-            _adf_para(_adf_text(status, [{"type": "em"}])),
-        ]
-    else:
-        visible = [
-            _adf_para(_adf_text(v.headline or v.probable_root_cause, [{"type": "strong"}])),
-            _adf_para(_adf_text(v.plain_summary)),
-            _adf_para(_adf_text(status, [{"type": "em"}])),
-        ]
+    visible = [
+        _adf_para(_adf_text(v.headline or v.probable_root_cause, [{"type": "strong"}])),
+        _adf_para(_adf_text(v.plain_summary)),
+        _adf_para(_adf_text(status, [{"type": "em"}])),
+    ]
 
     # Collapsible details: the evidence trail with links, blast radius, next step.
     detail: list[dict] = []
