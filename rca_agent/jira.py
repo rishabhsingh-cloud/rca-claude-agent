@@ -28,6 +28,24 @@ JIRA_READ_TOOLS = (
 )
 
 
+def _extract_pdf_text(pdf_bytes: bytes, max_chars: int = 8000) -> str:
+    """Extract plain text from a PDF using pdfplumber. Truncates to max_chars."""
+    try:
+        import pdfplumber, io
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            parts = []
+            for page in pdf.pages:
+                text = page.extract_text() or ""
+                parts.append(text)
+                if sum(len(p) for p in parts) >= max_chars:
+                    break
+        return "\n".join(parts)[:max_chars]
+    except ImportError:
+        return "[PDF extraction unavailable — install pdfplumber]"
+    except Exception as e:
+        return f"[PDF extraction failed: {e}]"
+
+
 def atlassian_mcp_server_config(url: str = ATLASSIAN_MCP_URL) -> dict:
     """The mcp_servers entry for ClaudeAgentOptions (remote HTTP MCP server)."""
     return {"type": "http", "url": url}
@@ -95,42 +113,61 @@ class JiraClient:
         return r.json().get("issues", [])
 
     _IMAGE_TYPES = {"image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"}
-    _MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB per image
-    _MAX_IMAGES = 4                      # cap to avoid token explosion
+    _PDF_TYPES   = {"application/pdf"}
+    _MAX_BYTES   = 10 * 1024 * 1024  # 10 MB per attachment
+    _MAX_IMAGES  = 4
+    _MAX_PDFS    = 3
+    _MAX_PDF_CHARS = 8000            # truncate extracted PDF text to keep tokens sane
 
     def get_image_attachments(self, key: str) -> list[dict]:
-        """Return up to _MAX_IMAGES image attachments for a ticket.
+        """Return up to _MAX_IMAGES image attachments as base64.
+        Each entry: {filename, mimeType, content (base64 str)}."""
+        return self._get_attachments(key)["images"]
 
-        Each entry: {filename, mimeType, content (base64 str)}.
-        Non-image attachments and images over _MAX_IMAGE_BYTES are skipped.
-        """
+    def get_pdf_texts(self, key: str) -> list[dict]:
+        """Return up to _MAX_PDFS PDF attachments as extracted text.
+        Each entry: {filename, text}."""
+        return self._get_attachments(key)["pdfs"]
+
+    def get_all_attachments(self, key: str) -> dict:
+        """Return both images and PDF texts in one call (single issue fetch)."""
+        return self._get_attachments(key)
+
+    def _get_attachments(self, key: str) -> dict:
         issue = self.get_issue(key)
         attachments = issue.get("fields", {}).get("attachment") or []
-        results = []
+        images, pdfs = [], []
         for att in attachments:
             mime = (att.get("mimeType") or "").lower()
-            if mime not in self._IMAGE_TYPES:
-                continue
             size = att.get("size", 0)
-            if size > self._MAX_IMAGE_BYTES:
+            url  = att.get("content")
+            if not url or size > self._MAX_BYTES:
                 continue
-            url = att.get("content")
-            if not url:
-                continue
-            try:
-                r = self._client.get(url)
-                r.raise_for_status()
-                import base64 as _b64
-                results.append({
-                    "filename": att.get("filename", "attachment"),
-                    "mimeType": mime,
-                    "content": _b64.b64encode(r.content).decode(),
-                })
-            except Exception:
-                continue
-            if len(results) >= self._MAX_IMAGES:
-                break
-        return results
+            if mime in self._IMAGE_TYPES and len(images) < self._MAX_IMAGES:
+                try:
+                    r = self._client.get(url)
+                    r.raise_for_status()
+                    import base64 as _b64
+                    images.append({
+                        "filename": att.get("filename", "attachment"),
+                        "mimeType": mime,
+                        "content": _b64.b64encode(r.content).decode(),
+                    })
+                except Exception:
+                    continue
+            elif mime in self._PDF_TYPES and len(pdfs) < self._MAX_PDFS:
+                try:
+                    r = self._client.get(url)
+                    r.raise_for_status()
+                    text = _extract_pdf_text(r.content, self._MAX_PDF_CHARS)
+                    if text.strip():
+                        pdfs.append({
+                            "filename": att.get("filename", "attachment.pdf"),
+                            "text": text,
+                        })
+                except Exception:
+                    continue
+        return {"images": images, "pdfs": pdfs}
 
     def add_comment(self, key: str, text: str) -> dict:
         """Post a plain-text comment (write-back). NOT called automatically —

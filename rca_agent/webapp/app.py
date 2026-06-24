@@ -66,12 +66,20 @@ async def run_rca(key: str):
     client = build_client(s)
     try:
         tkey, text = jira.get(key, drop_all_comments=True)
-        images = jira.get_image_attachments(key)
+        attachments = jira.get_all_attachments(key)
+        images = attachments["images"] or None
+        # Append extracted PDF text directly into the ticket context
+        if attachments["pdfs"]:
+            pdf_block = "\n\n".join(
+                f"--- attached PDF: {p['filename']} ---\n{p['text']}"
+                for p in attachments["pdfs"]
+            )
+            text = text + "\n\n" + pdf_block
         # Run in a thread with its own event loop — fixes Windows asyncio subprocess issue
         loop = asyncio.get_event_loop()
         raw = await loop.run_in_executor(
             None,
-            lambda: asyncio.run(run_agent(tkey, text, client, s, jira_mcp=False, images=images or None))
+            lambda: asyncio.run(run_agent(tkey, text, client, s, jira_mcp=False, images=images))
         )
         v = parse_verdict(raw, tkey)
         rca_json = json.dumps(v.to_dict())
