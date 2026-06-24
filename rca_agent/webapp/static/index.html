@@ -252,10 +252,13 @@ async function selectTicket(key) {
     ${!alreadyDone ? `
     <div class="actions" id="actions">
       <button class="accept-btn" id="acceptBtn" onclick="acceptRca()" ${!hasRca ? 'disabled' : ''}>
+        ✓ Accept
+      </button>
+      <button class="accept-btn" id="acceptPostBtn" onclick="acceptAndPostRca()" ${!hasRca ? 'disabled' : ''} style="background:#006644;">
         ✓ Accept &amp; Post to Jira
       </button>
       <button class="reject-btn" id="rejectBtn" onclick="showHumanRca()" ${!hasRca ? 'disabled' : ''}>
-        ✗ Reject — Write Human RCA
+        ✗ Reject
       </button>
     </div>
 
@@ -396,6 +399,23 @@ async function acceptRca() {
     if (!res.ok) throw new Error(await res.text());
     const idx = tickets.findIndex(t => t.key === currentKey);
     if (idx !== -1) tickets[idx].status = 'accepted';
+    showToast('✓ Accepted');
+    selectTicket(currentKey);
+    renderTicketList();
+    loadScoreboard();
+  } catch(e) {
+    showToast('Error: ' + e.message, true);
+    setActionBtns(false);
+  }
+}
+
+async function acceptAndPostRca() {
+  setActionBtns(true);
+  try {
+    const res = await fetch(`/api/tickets/${currentKey}/accept_and_post`, {method:'POST'});
+    if (!res.ok) throw new Error(await res.text());
+    const idx = tickets.findIndex(t => t.key === currentKey);
+    if (idx !== -1) tickets[idx].status = 'accepted';
     showToast('✓ RCA posted to Jira');
     selectTicket(currentKey);
     renderTicketList();
@@ -457,10 +477,10 @@ async function loadScoreboard() {
 }
 
 function setActionBtns(disabled) {
-  const a = document.getElementById('acceptBtn');
-  const r = document.getElementById('rejectBtn');
-  if (a) a.disabled = disabled;
-  if (r) r.disabled = disabled;
+  ['acceptBtn', 'acceptPostBtn', 'rejectBtn'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = disabled;
+  });
 }
 
 function showToast(msg, isError) {

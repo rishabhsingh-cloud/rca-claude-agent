@@ -127,6 +127,18 @@ class RejectRequest(BaseModel):
 
 @app.post("/api/tickets/{key}/accept")
 def accept(key: str):
+    """Mark as accepted locally without posting to Jira."""
+    ticket = store.get_ticket(key)
+    if not ticket or not ticket.get("bot_rca_json"):
+        raise HTTPException(400, "No RCA found for this ticket — run RCA first")
+    if ticket["status"] in ("accepted", "rejected"):
+        raise HTTPException(400, "Already reviewed")
+    store.mark_accepted(key, "")
+    return {"status": "accepted"}
+
+
+@app.post("/api/tickets/{key}/accept_and_post")
+def accept_and_post(key: str):
     """Post the bot's RCA to Jira and mark as accepted."""
     ticket = store.get_ticket(key)
     if not ticket or not ticket.get("bot_rca_json"):
