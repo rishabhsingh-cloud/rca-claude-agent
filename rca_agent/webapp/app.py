@@ -91,6 +91,14 @@ async def run_rca(key: str):
         raise HTTPException(500, str(e))
 
 
+@app.get("/api/tickets/{key}/raw_attachments")
+def raw_attachments(key: str):
+    """Debug: return raw attachment metadata from Jira."""
+    jira = _jira()
+    issue = jira.get_issue(key)
+    return issue.get("fields", {}).get("attachment") or []
+
+
 @app.get("/api/tickets/{key}/attachments")
 def get_attachments(key: str):
     """Fetch images and PDFs attached to a Jira ticket."""

@@ -145,7 +145,7 @@ class JiraClient:
                 continue
             if mime in self._IMAGE_TYPES and len(images) < self._MAX_IMAGES:
                 try:
-                    r = self._client.get(url)
+                    r = self._client.get(url, follow_redirects=True)
                     r.raise_for_status()
                     import base64 as _b64
                     images.append({

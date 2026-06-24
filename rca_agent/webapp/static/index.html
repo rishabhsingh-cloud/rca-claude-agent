@@ -282,7 +282,7 @@ async function selectTicket(key) {
   `;
 
   loadScoreboard();
-  loadAttachments(key);
+  setTimeout(() => loadAttachments(key), 50);
 }
 
 async function loadAttachments(key) {
@@ -310,9 +310,9 @@ async function loadAttachments(key) {
         </details>`).join('')}`;
 
     const detail = document.getElementById('detail');
-    const descCard = detail.querySelectorAll('.card')[1];
-    if (descCard) descCard.after(card);
-    else detail.prepend(card);
+    const rcaCard = detail.querySelector('.rca-card');
+    if (rcaCard) rcaCard.before(card);
+    else detail.appendChild(card);
   } catch(e) {}
 }
 
