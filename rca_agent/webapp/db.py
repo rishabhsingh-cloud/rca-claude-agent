@@ -25,10 +25,16 @@ def init_db() -> None:
                 bot_rca_json    TEXT,
                 human_rca       TEXT,
                 comment_id      TEXT,
+                turns_used      INTEGER,
                 created_at      TEXT,
                 updated_at      TEXT DEFAULT (datetime('now'))
             )
         """)
+        # migrate existing DBs that don't have turns_used yet
+        try:
+            con.execute("ALTER TABLE reviews ADD COLUMN turns_used INTEGER")
+        except sqlite3.OperationalError:
+            pass
 
 
 def upsert_ticket(key: str, title: str, description: str, created_at: str) -> None:
@@ -56,12 +62,12 @@ def get_all_tickets() -> list[dict]:
         return [dict(r) for r in rows]
 
 
-def save_rca(key: str, rca_json: str) -> None:
+def save_rca(key: str, rca_json: str, turns_used: int | None = None) -> None:
     with _conn() as con:
         con.execute("""
             UPDATE reviews SET bot_rca_json = ?, status = 'rca_ready',
-            updated_at = datetime('now') WHERE key = ?
-        """, (rca_json, key))
+            turns_used = ?, updated_at = datetime('now') WHERE key = ?
+        """, (rca_json, turns_used, key))
 
 
 def mark_accepted(key: str, comment_id: str) -> None:

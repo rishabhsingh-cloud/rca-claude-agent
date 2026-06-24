@@ -77,14 +77,14 @@ async def run_rca(key: str):
             text = text + "\n\n" + pdf_block
         # Run in a thread with its own event loop — fixes Windows asyncio subprocess issue
         loop = asyncio.get_event_loop()
-        raw = await loop.run_in_executor(
+        raw, turns_used = await loop.run_in_executor(
             None,
             lambda: asyncio.run(run_agent(tkey, text, client, s, jira_mcp=False, images=images))
         )
         v = parse_verdict(raw, tkey)
         rca_json = json.dumps(v.to_dict())
-        store.save_rca(key, rca_json)
-        return {"status": "ok", "verdict": v.to_dict()}
+        store.save_rca(key, rca_json, turns_used=turns_used)
+        return {"status": "ok", "verdict": v.to_dict(), "turns_used": turns_used}
     except Exception as e:
         import traceback
         traceback.print_exc()

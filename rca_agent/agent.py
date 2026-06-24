@@ -35,9 +35,8 @@ class AgentRunError(RuntimeError):
 async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClient,
                     settings: Settings, jira_mcp: bool = False,
                     max_turns: int = 60,
-                    images: list[dict] | None = None) -> str:
-    """Run one investigation through the agent loop; return its final text
-    (expected to be the JSON verdict).
+                    images: list[dict] | None = None) -> tuple[str, int]:
+    """Run one investigation through the agent loop; return (final_text, turns_used).
 
     Jira integration (two modes):
       - FETCH-THEN-PASS (default, recommended): the orchestrator fetches the
@@ -89,9 +88,11 @@ async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClie
         prompt = text_part
 
     final_text = ""
+    turns_used = 0
     try:
         async for message in query(prompt=prompt, options=options):
             if isinstance(message, AssistantMessage):
+                turns_used += 1
                 for block in message.content:
                     if isinstance(block, TextBlock):
                         final_text = block.text
@@ -118,7 +119,7 @@ async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClie
         raise AgentRunError(
             "agent did not emit a verdict (likely hit max_turns mid-compose): "
             f"{final_text[:150] or 'no output'}")
-    return final_text
+    return final_text, turns_used
 
 
 def _looks_like_verdict(text: str) -> bool:
