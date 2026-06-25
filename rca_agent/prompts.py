@@ -54,17 +54,19 @@ with `mcp__atlassian__getJiraIssueRemoteIssueLinks`. Do not write to Jira.
       to confirm the repo). Most cross-service bugs are decided here.
    b. IN-REPO AREA: `mcp__rca__get_repo_summary` for that repo — read its
       symptom->cause table and weak points to pick the area.
-   c. EXACT SYMBOL: `mcp__rca__search_code` (live grep for the literal error /
-      UI label) and `mcp__rca__search_symbols` (graph) to find the function, then
-      `fetch_file_lines` + `git_blame` + `merge_requests_for_commit` as in the
-      trace path.
+   c. EXACT SYMBOL: `mcp__rca__search_code_local` (fast local ripgrep — prefer
+      this) or `mcp__rca__search_code` (GitLab API fallback if local returns
+      'not available') and `mcp__rca__search_symbols` (graph) to find the
+      function, then `fetch_file_lines` + `git_blame` +
+      `merge_requests_for_commit` as in the trace path.
 
 # Tools
 - ORIENT (hypotheses, not evidence): `mcp__rca__search_architecture` (cross-service
   map), `mcp__rca__route_repo` + `mcp__rca__get_repo_summary` (which repo/area),
   `mcp__rca__parse_stack_trace` (the fetch list when a trace exists).
-- GROUND TRUTH from GitLab: `mcp__rca__fetch_file_lines`, `mcp__rca__search_code`,
-  `mcp__rca__git_blame`, `mcp__rca__get_commit`, `mcp__rca__merge_requests_for_commit`.
+- GROUND TRUTH from GitLab: `mcp__rca__fetch_file_lines`, `mcp__rca__search_code_local`,
+  `mcp__rca__search_code`, `mcp__rca__git_blame`, `mcp__rca__get_commit`,
+  `mcp__rca__merge_requests_for_commit`.
 - CODE GRAPH (cross-file tracing): `mcp__rca__find_callers` (who calls a symbol —
   where bad input came from + blast radius), `mcp__rca__find_dependents`,
   `mcp__rca__get_subgraph`. A MAP, not proof — confirm with `mcp__rca__fetch_file_lines`.

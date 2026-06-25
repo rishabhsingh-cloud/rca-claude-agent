@@ -31,6 +31,7 @@ from .newrelic import search_nr_errors as _search_nr_errors
 from .newrelic import search_nr_logs as _search_nr_logs
 from .routing import read_summary as _read_summary
 from .routing import route_repo as _route_repo
+from .local_search import search_code_local as _search_code_local
 from .search import web_search as _web_search
 from .stack_trace import parse_stack_trace as _parse_trace
 
@@ -171,6 +172,17 @@ def build_rca_server(client: GitLabClient):
             return _err(str(e))
         return _ok({"matches": hits})
 
+    @tool("search_code_local",
+          "NO-TRACE localizer: ripgrep search over locally cloned repos — faster "
+          "and more reliable than GitLab API search. Use this BEFORE search_code. "
+          "Falls back to 'not available' if repos are not cloned (then use search_code).",
+          {"project": str, "query": str})
+    async def search_code_local(args):
+        result = _search_code_local(args["project"], args["query"])
+        if "error" in result:
+            return _err(result["error"])
+        return _ok(result)
+
     @tool("search_architecture",
           "Cross-service platform map: search the architecture reference for where "
           "a symptom originates — service boundaries, Kafka topics, HTTP proxies, "
@@ -248,7 +260,7 @@ def build_rca_server(client: GitLabClient):
     tools = [parse_stack_trace, route_repo, fetch_file_lines, git_blame,
              get_commit, merge_requests_for_commit,
              find_callers, find_dependents, get_subgraph, graph_has_edge,
-             search_symbols, search_code, search_architecture, get_repo_summary,
+             search_symbols, search_code, search_code_local, search_architecture, get_repo_summary,
              web_search, get_service_errors, query_metrics,
              search_nr_errors, search_nr_logs, query_nr]
     server = create_sdk_mcp_server(name="rca", version="0.1.0", tools=tools)
@@ -265,6 +277,7 @@ def build_rca_server(client: GitLabClient):
         "mcp__rca__graph_has_edge",
         "mcp__rca__search_symbols",
         "mcp__rca__search_code",
+        "mcp__rca__search_code_local",
         "mcp__rca__search_architecture",
         "mcp__rca__get_repo_summary",
         "mcp__rca__web_search",
