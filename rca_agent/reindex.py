@@ -8,8 +8,11 @@ doesn't break when branches are renamed.
 """
 from __future__ import annotations
 
+import os
+import subprocess
 import time
 from datetime import date
+from pathlib import Path
 
 from .config import get_settings
 from .gitlab_client import build_client
@@ -27,12 +30,34 @@ def _log(msg: str) -> None:
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
 
 
+def _git_pull_repos() -> None:
+    repos_dir = os.getenv("REPOS_DIR", "").strip()
+    if not repos_dir:
+        _log("git pull: REPOS_DIR not set, skipping")
+        return
+    for project in REPOS:
+        repo_name = project.split("/")[-1]
+        repo_path = Path(repos_dir) / repo_name
+        if not repo_path.is_dir():
+            _log(f"git pull: {repo_name} not cloned, skipping")
+            continue
+        try:
+            result = subprocess.run(
+                ["git", "pull", "--ff-only"],
+                cwd=repo_path, capture_output=True, text=True, timeout=60,
+            )
+            _log(f"git pull {repo_name}: {result.stdout.strip() or 'ok'}")
+        except Exception as e:
+            _log(f"git pull {repo_name}: FAILED — {e}")
+
+
 def reindex_all() -> None:
     settings = get_settings()
     client = build_client(settings)
     today = date.today().isoformat()
     failed = []
 
+    _git_pull_repos()
     _log(f"Starting re-index for {len(REPOS)} repos")
     for project in REPOS:
         try:
