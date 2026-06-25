@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.agent:
         # Imported lazily so the deterministic path doesn't require the SDK.
         from .agent import parse_verdict, run_agent
-        raw = asyncio.run(run_agent(ticket_key, ticket_text, client, settings))
+        raw, _ = asyncio.run(run_agent(ticket_key, ticket_text, client, settings))
         verdict = parse_verdict(raw, ticket_key)
     else:
         verdict = investigate(ticket_key, ticket_text, client, settings,
