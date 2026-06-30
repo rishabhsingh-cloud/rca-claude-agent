@@ -38,8 +38,18 @@ jobs:
         run: git -C /home/rishabh/rca-claude-agent pull
 
       - name: Install / upgrade package
-        run: /home/rishabh/rca-claude-agent/.venv/bin/pip install -e ".[live]"
+        run: /home/rishabh/rca-claude-agent/.venv/bin/pip install -e ".[live,webapp,appdb]"
         working-directory: /home/rishabh/rca-claude-agent
 
-      - name: Restart daemon
-        run: XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user restart rca-daemon
+      - name: Install / refresh webapp systemd unit
+        run: |
+          mkdir -p ~/.config/systemd/user
+          cp /home/rishabh/rca-claude-agent/deploy/rca-webapp.service ~/.config/systemd/user/rca-webapp.service
+          XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user daemon-reload
+          XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user enable rca-webapp
+
+      # NOTE: the autonomous daemon (rca-daemon) is intentionally NOT restarted.
+      # We've moved to human-in-the-loop review via the webapp; the daemon should
+      # be stopped + disabled on EC2 so it no longer auto-posts to Jira.
+      - name: Restart webapp
+        run: XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user restart rca-webapp

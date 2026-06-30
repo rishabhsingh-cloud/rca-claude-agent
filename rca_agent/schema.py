@@ -29,6 +29,16 @@ class Triage(str, Enum):
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 
 
+class CauseCategory(str, Enum):
+    """Which bucket the root cause falls into — the QA-facing classification."""
+    CODE = "code"                    # a bug in our own code
+    DATA = "data"                    # data corruption / bad or missing data
+    INFRASTRUCTURE = "infrastructure"  # infra / environment / deployment
+    THIRD_PARTY = "third_party"      # external dependency (e.g. NIC, a vendor API)
+    UX = "ux"                        # UX / usability issue, not a defect
+    UNKNOWN = "unknown"              # cannot be determined from the evidence
+
+
 @dataclass
 class EvidenceLink:
     """One verifiable artifact in the symptom -> code -> change chain."""
@@ -47,6 +57,8 @@ class Verdict:
     # Jargon-free explanation for someone who does NOT know the codebase: what is
     # broken (user-visible), where it comes from, and why — in plain language.
     plain_summary: str = ""
+    # Which bucket the root cause falls into (code / data / infra / 3rd-party / UX).
+    cause_category: CauseCategory = CauseCategory.UNKNOWN
     evidence_chain: list[EvidenceLink] = field(default_factory=list)
     is_regression: bool | None = None
     introducing_mr: str | None = None      # MR url or "!iid"
@@ -62,6 +74,7 @@ class Verdict:
         d = asdict(self)
         d["triage"] = self.triage.value
         d["confidence"] = self.confidence.value
+        d["cause_category"] = self.cause_category.value
         return d
 
     @staticmethod
@@ -71,13 +84,14 @@ class Verdict:
             "type": "object",
             "additionalProperties": False,
             "required": [
-                "ticket", "headline", "probable_root_cause", "plain_summary",
-                "evidence_chain", "is_regression", "triage", "confidence",
-                "suggested_next_action",
+                "ticket", "headline", "cause_category", "probable_root_cause",
+                "plain_summary", "evidence_chain", "is_regression", "triage",
+                "confidence", "suggested_next_action",
             ],
             "properties": {
                 "ticket": {"type": "string"},
                 "headline": {"type": "string"},
+                "cause_category": {"type": "string", "enum": [c.value for c in CauseCategory]},
                 "probable_root_cause": {"type": "string"},
                 "plain_summary": {"type": "string"},
                 "evidence_chain": {

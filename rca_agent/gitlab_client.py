@@ -104,6 +104,8 @@ class GitLabClient(Protocol):
 
     def merge_requests_for_commit(self, project: str, sha: str) -> list[MergeRequest]: ...
 
+    def get_merge_request(self, project: str, iid: int) -> MergeRequest | None: ...
+
 
 # --- Mock implementation -------------------------------------------------------
 
@@ -224,6 +226,17 @@ class MockGitLabClient:
                 state=m.get("state", "merged"),
             ))
         return out
+
+    def get_merge_request(self, project: str, iid: int) -> MergeRequest | None:
+        for sha_mrs in self._meta(project).get("commit_mrs", {}).values():
+            for m in sha_mrs:
+                if m.get("iid") == iid:
+                    return MergeRequest(
+                        iid=m["iid"], title=m["title"], author=m["author"],
+                        web_url=m["web_url"], merged_at=m.get("merged_at"),
+                        state=m.get("state", "merged"),
+                    )
+        return None
 
 
 # --- Live read-only REST implementation ---------------------------------------
@@ -373,6 +386,18 @@ class RestGitLabClient:
                 state=m.get("state", ""),
             ))
         return out
+
+    def get_merge_request(self, project: str, iid: int) -> MergeRequest | None:
+        ep = f"/projects/{self._pid(project)}/merge_requests/{iid}"
+        m = self._get(ep)
+        if not m:
+            return None
+        return MergeRequest(
+            iid=m["iid"], title=m.get("title", ""),
+            author=(m.get("author") or {}).get("username", ""),
+            web_url=m.get("web_url", ""), merged_at=m.get("merged_at"),
+            state=m.get("state", ""),
+        )
 
 
 # --- Factory -------------------------------------------------------------------

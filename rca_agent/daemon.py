@@ -30,6 +30,7 @@ from .gitlab_client import build_client
 from .jira import JiraClient
 from .schema import Confidence
 from .tickets import flatten_adf
+from .verify import verify_verdict
 
 # Bugs filed today in AUT; comment-dedup handles already-processed tickets.
 DEFAULT_JQL = ("project = AUT AND issuetype = Bug AND statusCategory != Done "
@@ -80,6 +81,12 @@ async def poll_once(jql: str, post_mode: str, max_tickets: int) -> int:
             tkey, text = jira.get(key, drop_rca_comments=True)
             raw, _turns = await run_agent(tkey, text, client, settings, jira_mcp=False)
             v = parse_verdict(raw, tkey)
+            vr = verify_verdict(v, client)
+            if vr.total:
+                note = vr.as_note()
+                v.notes = (v.notes + "\n\n" + note).strip() if v.notes else note
+                v.confidence = vr.downgraded_confidence(v.confidence)
+                _log(f"{key}: auto-verify {vr.passed}/{vr.total} checks passed")
             if _should_post(v, post_mode):
                 res = jira.post_verdict(key, v)
                 _log(f"{key}: {v.confidence.value}/{v.triage.value} -> POSTED "

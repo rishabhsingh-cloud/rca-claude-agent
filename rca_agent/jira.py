@@ -148,10 +148,18 @@ class JiraClient:
                     r = self._client.get(url, follow_redirects=True)
                     r.raise_for_status()
                     import base64 as _b64
+                    import io
+                    from PIL import Image
+                    img = Image.open(io.BytesIO(r.content))
+                    if img.width > 800:
+                        ratio = 800 / img.width
+                        img = img.resize((800, int(img.height * ratio)), Image.LANCZOS)
+                    buf = io.BytesIO()
+                    img.convert("RGB").save(buf, format="JPEG", quality=60)
                     images.append({
                         "filename": att.get("filename", "attachment"),
-                        "mimeType": mime,
-                        "content": _b64.b64encode(r.content).decode(),
+                        "mimeType": "image/jpeg",
+                        "content": _b64.b64encode(buf.getvalue()).decode(),
                     })
                 except Exception:
                     continue

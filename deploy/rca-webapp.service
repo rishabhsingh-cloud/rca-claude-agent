@@ -1,0 +1,20 @@
+[Unit]
+Description=RCA review webapp (FastAPI/uvicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/rishabh/rca-claude-agent
+EnvironmentFile=/home/rishabh/rca-claude-agent/.env
+# Bound to 0.0.0.0 so it is reachable on the internal VPN; access is limited by
+# the EC2 security group (internal subnet only), not by app-level auth.
+ExecStart=/home/rishabh/rca-claude-agent/.venv/bin/python3 -m uvicorn \
+    rca_agent.webapp.app:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

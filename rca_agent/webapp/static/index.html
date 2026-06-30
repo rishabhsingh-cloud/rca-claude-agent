@@ -324,11 +324,28 @@ function openLightbox(src) {
   document.getElementById('lightbox').classList.add('show');
 }
 
+const CAUSE_BUCKETS = {
+  code:           {label: 'Code',           bg: '#ffebe6', fg: '#bf2600'},
+  data:           {label: 'Data',           bg: '#fffae6', fg: '#974f0c'},
+  infrastructure: {label: 'Infrastructure', bg: '#deebff', fg: '#0747a6'},
+  third_party:    {label: 'Third-party',    bg: '#eae6ff', fg: '#403294'},
+  ux:             {label: 'UX',             bg: '#e3fcef', fg: '#006644'},
+  unknown:        {label: 'Unknown',        bg: '#f4f5f7', fg: '#5e6c84'},
+};
+
+function causeBadge(category) {
+  const b = CAUSE_BUCKETS[category] || CAUSE_BUCKETS.unknown;
+  return `<span style="display:inline-block;margin-bottom:10px;padding:2px 10px;
+    border-radius:3px;font-size:11px;font-weight:700;text-transform:uppercase;
+    letter-spacing:0.04em;background:${b.bg};color:${b.fg};">${b.label}</span>`;
+}
+
 function renderRcaContent(ticket) {
   if (ticket.bot_rca_json) {
     const v = JSON.parse(ticket.bot_rca_json);
     let html = '';
     if (v.headline) html += `<p style="font-weight:600;margin-bottom:6px;">${escHtml(v.headline)}</p>`;
+    html += causeBadge(v.cause_category);
     if (v.plain_summary) html += `<p style="margin-bottom:10px;">${escHtml(v.plain_summary)}</p>`;
     html += `<p style="color:#5e6c84;font-size:13px;">${escHtml(v.probable_root_cause)}</p>`;
     if (v.suggested_next_action) {
@@ -354,6 +371,19 @@ function renderRcaContent(ticket) {
       </button>
     </div>`;
   }
+  if (ticket.status === 'failed') {
+    const reason = ticket.error
+      ? escHtml(ticket.error)
+      : 'RCA failed — check server logs.';
+    return `<div style="border-left:3px solid #bf2600;background:#fff5f4;padding:10px 12px;border-radius:4px;">
+        <p style="color:#bf2600;font-weight:600;margin:0 0 4px;">RCA failed</p>
+        <p style="color:#5e6c84;font-size:13px;margin:0;">${reason}</p>
+      </div>
+      <button class="run-btn" onclick="runRca('${ticket.key}')" style="margin-top:10px;">Retry</button>`;
+  }
+  if (ticket.status === 'running') {
+    return '<p style="color:#5e6c84;font-size:14px;font-style:italic;">⏳ Agent is investigating the codebase... this takes 1-3 minutes.</p>';
+  }
   return '<p class="rca-placeholder">Running...</p>';
 }
 
@@ -368,18 +398,36 @@ async function runRca(key) {
   try {
     const res = await fetch(`/api/tickets/${key}/rca`, {method:'POST'});
     if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
     const idx = tickets.findIndex(t => t.key === key);
-    if (idx !== -1) {
-      tickets[idx].bot_rca_json = JSON.stringify(data.verdict);
-      tickets[idx].status = 'rca_ready';
-    }
-    selectTicket(key);
-    renderTicketList();
+    if (idx !== -1) tickets[idx].status = 'running';
+    setTimeout(() => pollRca(key), 5000);
   } catch(e) {
     document.getElementById('rcaContent').innerHTML =
       `<p style="color:#bf2600;">Failed: ${escHtml(String(e))}</p>
        <button class="run-btn" onclick="runRca('${key}')" style="margin-top:10px;">Retry</button>`;
+  }
+}
+
+async function pollRca(key) {
+  try {
+    const res = await fetch(`/api/tickets/${key}/status`);
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    const idx = tickets.findIndex(t => t.key === key);
+    if (data.status === 'rca_ready') {
+      if (idx !== -1) {
+        tickets[idx].bot_rca_json = JSON.stringify(data.verdict);
+        tickets[idx].status = 'rca_ready';
+      }
+      if (currentKey === key) { selectTicket(key); renderTicketList(); }
+    } else if (data.status === 'failed') {
+      if (idx !== -1) { tickets[idx].status = 'failed'; tickets[idx].error = data.error; }
+      if (currentKey === key) selectTicket(key);
+    } else {
+      setTimeout(() => pollRca(key), 5000);
+    }
+  } catch(e) {
+    setTimeout(() => pollRca(key), 5000);
   }
 }
 

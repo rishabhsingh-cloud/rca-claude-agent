@@ -21,11 +21,10 @@ from dataclasses import asdict
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
+from .app_db import query_postgres as _query_postgres
 from .architecture import search_architecture as _search_arch
 from .gitlab_client import GitLabClient, GitLabError
 from .graph_store import load_repo_graph
-from .metrics import get_service_errors as _get_service_errors
-from .metrics import query_metrics as _query_metrics
 from .newrelic import query_nr as _query_nr
 from .newrelic import search_nr_errors as _search_nr_errors
 from .newrelic import search_nr_logs as _search_nr_logs
@@ -212,26 +211,6 @@ def build_rca_server(client: GitLabClient):
     async def web_search(args):
         return _ok(_web_search(args["query"], int(args.get("max_results") or 5)))
 
-    @tool("get_service_errors",
-          "Infra metrics shortcut: fetch HTTP 5xx rate, total error count, and pod "
-          "restart count for a service over the last N hours. Use to check if the "
-          "service was misbehaving around the time of the bug. Requires Grafana creds.",
-          {"service": str, "hours_ago": int})
-    async def get_service_errors(args):
-        return _ok(_get_service_errors(args["service"], int(args.get("hours_ago") or 2)))
-
-    @tool("query_metrics",
-          "Run a raw PromQL query against Grafana/Prometheus for the last N hours. "
-          "Use for custom metric lookups: latency p99, memory OOM, DB slow queries, "
-          "queue depth, etc. Requires GRAFANA_URL, GRAFANA_TOKEN, GRAFANA_PROM_UID.",
-          {"promql": str, "hours_ago": int, "step": str})
-    async def query_metrics(args):
-        return _ok(_query_metrics(
-            args["promql"],
-            int(args.get("hours_ago") or 1),
-            args.get("step") or "60s",
-        ))
-
     @tool("search_nr_errors",
           "Search New Relic APM for recent TransactionErrors for a service. "
           "Returns production stack traces, error class, message, and count. "
@@ -257,12 +236,24 @@ def build_rca_server(client: GitLabClient):
     async def query_nr(args):
         return _ok(_query_nr(args["nrql"]))
 
+    @tool("query_users_db",
+          "Read-only Postgres lookup against the users/organizations data — the "
+          "GROUND TRUTH for account/identity questions (is this org registered? is "
+          "a user's plan/config field null or wrong?). Use to CONFIRM a data-cause "
+          "hypothesis instead of guessing. SELECT only; results are PII-masked "
+          "(customer names/emails/GSTINs come back redacted — you see field "
+          "presence/null-ness, not raw values), so reason about SHAPE not content. "
+          "Returns 'not configured' if no DB creds — then skip it.",
+          {"sql": str})
+    async def query_users_db(args):
+        return _ok(_query_postgres(args["sql"]))
+
     tools = [parse_stack_trace, route_repo, fetch_file_lines, git_blame,
              get_commit, merge_requests_for_commit,
              find_callers, find_dependents, get_subgraph, graph_has_edge,
              search_symbols, search_code, search_code_local, search_architecture, get_repo_summary,
-             web_search, get_service_errors, query_metrics,
-             search_nr_errors, search_nr_logs, query_nr]
+             web_search,
+             search_nr_errors, search_nr_logs, query_nr, query_users_db]
     server = create_sdk_mcp_server(name="rca", version="0.1.0", tools=tools)
     tool_names = [
         "mcp__rca__parse_stack_trace",
@@ -281,10 +272,9 @@ def build_rca_server(client: GitLabClient):
         "mcp__rca__search_architecture",
         "mcp__rca__get_repo_summary",
         "mcp__rca__web_search",
-        "mcp__rca__get_service_errors",
-        "mcp__rca__query_metrics",
         "mcp__rca__search_nr_errors",
         "mcp__rca__search_nr_logs",
         "mcp__rca__query_nr",
+        "mcp__rca__query_users_db",
     ]
     return server, tool_names

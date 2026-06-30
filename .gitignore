@@ -14,6 +14,10 @@ venv/
 
 out/
 
+# SQLite review store — runtime state, created fresh per environment (never ship
+# local test data to the server).
+*.db
+
 # Published index = proprietary internal data (architecture doc + code graphs of
 # private repos). NOT version-controlled here; built by the indexer / shipped to
 # the server separately.

@@ -15,6 +15,7 @@ from ..gitlab_client import build_client
 from ..jira import JiraClient
 from ..schema import verdict_to_adf
 from ..tickets import build_ticket_source
+from ..verify import verify_verdict
 from . import db as store
 
 app = FastAPI(title="RCA Review")
@@ -56,39 +57,86 @@ def list_tickets():
     return store.get_all_tickets()
 
 
-@app.post("/api/tickets/{key}/rca")
-async def run_rca(key: str):
-    """Trigger RCA on demand for a ticket. Returns the verdict."""
+# How long a single investigation may run before we give up and mark it failed.
+# Cross-service / image tickets are slow; keep this generous but bounded so a
+# hung run can never wedge a row at 'running' forever.
+RCA_TIMEOUT_SECONDS = 600
+
+
+def _run_rca_background(key: str) -> None:
+    """Run RCA in a background thread — saves result to DB when done."""
     import asyncio
-    from concurrent.futures import ThreadPoolExecutor
+    import traceback
+    from ..agent import AgentRunError
     s = get_settings()
-    jira = _jira()
-    client = build_client(s)
     try:
+        jira = JiraClient(s.jira_url, s.jira_email, s.jira_token)
+        client = build_client(s)
         tkey, text = jira.get(key, drop_all_comments=True)
         attachments = jira.get_all_attachments(key)
         images = attachments["images"] or None
-        # Append extracted PDF text directly into the ticket context
         if attachments["pdfs"]:
             pdf_block = "\n\n".join(
                 f"--- attached PDF: {p['filename']} ---\n{p['text']}"
                 for p in attachments["pdfs"]
             )
             text = text + "\n\n" + pdf_block
-        # Run in a thread with its own event loop — fixes Windows asyncio subprocess issue
-        loop = asyncio.get_event_loop()
-        raw, turns_used = await loop.run_in_executor(
-            None,
-            lambda: asyncio.run(run_agent(tkey, text, client, s, jira_mcp=False, images=images))
+        # Hard ceiling: a hung/runaway agent must not wedge the DB row at
+        # 'running' forever — on timeout we fall through to mark_failed.
+        raw, turns_used = asyncio.run(
+            asyncio.wait_for(
+                run_agent(tkey, text, client, s, jira_mcp=False, images=images),
+                timeout=RCA_TIMEOUT_SECONDS,
+            )
         )
         v = parse_verdict(raw, tkey)
-        rca_json = json.dumps(v.to_dict())
-        store.save_rca(key, rca_json, turns_used=turns_used)
-        return {"status": "ok", "verdict": v.to_dict(), "turns_used": turns_used}
+        vr = verify_verdict(v, client)
+        if vr.total:
+            note = vr.as_note()
+            v.notes = (v.notes + "\n\n" + note).strip() if v.notes else note
+            v.confidence = vr.downgraded_confidence(v.confidence)
+        store.save_rca(key, json.dumps(v.to_dict()), turns_used=turns_used)
+    except (asyncio.TimeoutError, TimeoutError):
+        mins = RCA_TIMEOUT_SECONDS // 60
+        store.mark_failed(key, f"Timed out after {mins} minutes — the investigation "
+                               "ran too long. Try again, or check the ticket has "
+                               "enough detail to localize.")
+    except AgentRunError as e:
+        # Infra failure (out of credits, rate limit, overload, no verdict).
+        store.mark_failed(key, f"Agent could not finish: {str(e)[:240]}")
     except Exception as e:
-        import traceback
         traceback.print_exc()
-        raise HTTPException(500, str(e))
+        store.mark_failed(key, f"{type(e).__name__}: {str(e)[:240]}")
+
+
+@app.post("/api/tickets/{key}/rca")
+def run_rca(key: str):
+    """Start RCA in background. Returns immediately — poll /status for result."""
+    import threading
+    ticket = store.get_ticket(key)
+    if not ticket:
+        raise HTTPException(404, "Ticket not found")
+    if ticket["status"] == "running":
+        return {"status": "already_running"}
+    store.mark_running(key)
+    t = threading.Thread(target=_run_rca_background, args=(key,), daemon=True)
+    t.start()
+    return {"status": "started"}
+
+
+@app.get("/api/tickets/{key}/status")
+def rca_status(key: str):
+    """Poll this to check if RCA is done."""
+    ticket = store.get_ticket(key)
+    if not ticket:
+        raise HTTPException(404, "Ticket not found")
+    result = {"status": ticket["status"]}
+    if ticket["status"] == "rca_ready" and ticket.get("bot_rca_json"):
+        result["verdict"] = json.loads(ticket["bot_rca_json"])
+        result["turns_used"] = ticket.get("turns_used")
+    elif ticket["status"] == "failed":
+        result["error"] = ticket.get("error")
+    return result
 
 
 @app.get("/api/tickets/{key}/raw_attachments")

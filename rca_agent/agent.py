@@ -23,7 +23,7 @@ from .config import Settings
 from .gitlab_client import GitLabClient
 from .jira import atlassian_allowed_tools, atlassian_mcp_server_config
 from .prompts import build_system_prompt
-from .schema import Confidence, EvidenceLink, Triage, Verdict
+from .schema import CauseCategory, Confidence, EvidenceLink, Triage, Verdict
 from .tools import build_rca_server
 
 
@@ -74,9 +74,9 @@ async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClie
         img_note = (f"\n\nThe ticket also has {len(images)} screenshot(s) attached. "
                     "Read them carefully — they may show the exact error dialog, "
                     "UI state, or stack trace that caused the bug.")
-        prompt: list | str = [{"type": "text", "text": text_part + img_note}]
+        content: list = [{"type": "text", "text": text_part + img_note}]
         for img in images:
-            prompt.append({
+            content.append({
                 "type": "image",
                 "source": {
                     "type": "base64",
@@ -84,6 +84,20 @@ async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClie
                     "data": img["content"],
                 },
             })
+
+        # The SDK only writes input for a `str` or an `AsyncIterable` prompt — a
+        # plain list of content blocks is silently dropped (no input sent, stdin
+        # never closed), so the run hangs forever. Wrap the multimodal message in
+        # a single-item async stream in the streaming-input shape the SDK expects.
+        async def _prompt_stream():
+            yield {
+                "type": "user",
+                "session_id": "",
+                "message": {"role": "user", "content": content},
+                "parent_tool_use_id": None,
+            }
+
+        prompt: object = _prompt_stream()
     else:
         prompt = text_part
 
@@ -170,6 +184,9 @@ def parse_verdict(text: str, ticket_key: str) -> Verdict:
         probable_root_cause=d.get("probable_root_cause", ""),
         headline=d.get("headline", ""),
         plain_summary=d.get("plain_summary", ""),
+        cause_category=CauseCategory(d["cause_category"])
+        if d.get("cause_category") in {c.value for c in CauseCategory}
+        else CauseCategory.UNKNOWN,
         evidence_chain=[
             EvidenceLink(kind=e["kind"], ref=e["ref"], detail=e["detail"],
                          url=e.get("url", ""))

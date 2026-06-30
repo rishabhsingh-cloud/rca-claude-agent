@@ -26,15 +26,23 @@ def init_db() -> None:
                 human_rca       TEXT,
                 comment_id      TEXT,
                 turns_used      INTEGER,
+                error           TEXT,
                 created_at      TEXT,
                 updated_at      TEXT DEFAULT (datetime('now'))
             )
         """)
-        # migrate existing DBs that don't have turns_used yet
-        try:
-            con.execute("ALTER TABLE reviews ADD COLUMN turns_used INTEGER")
-        except sqlite3.OperationalError:
-            pass
+        # migrate existing DBs that don't have these columns yet
+        for col in ("turns_used INTEGER", "error TEXT"):
+            try:
+                con.execute(f"ALTER TABLE reviews ADD COLUMN {col}")
+            except sqlite3.OperationalError:
+                pass
+        # Recover rows wedged at 'running' by a crash/restart mid-run: their
+        # background thread is gone, so fail them (Retry button) instead of
+        # leaving an un-runnable spinner.
+        con.execute("UPDATE reviews SET status = 'failed', "
+                    "error = 'Interrupted by a server restart — please retry.' "
+                    "WHERE status = 'running'")
 
 
 def upsert_ticket(key: str, title: str, description: str, created_at: str) -> None:
@@ -66,8 +74,24 @@ def save_rca(key: str, rca_json: str, turns_used: int | None = None) -> None:
     with _conn() as con:
         con.execute("""
             UPDATE reviews SET bot_rca_json = ?, status = 'rca_ready',
-            turns_used = ?, updated_at = datetime('now') WHERE key = ?
+            turns_used = ?, error = NULL, updated_at = datetime('now') WHERE key = ?
         """, (rca_json, turns_used, key))
+
+
+def mark_running(key: str) -> None:
+    with _conn() as con:
+        con.execute("""
+            UPDATE reviews SET status = 'running', error = NULL,
+            updated_at = datetime('now') WHERE key = ?
+        """, (key,))
+
+
+def mark_failed(key: str, error: str | None = None) -> None:
+    with _conn() as con:
+        con.execute("""
+            UPDATE reviews SET status = 'failed', error = ?,
+            updated_at = datetime('now') WHERE key = ?
+        """, (error, key))
 
 
 def mark_accepted(key: str, comment_id: str) -> None:
