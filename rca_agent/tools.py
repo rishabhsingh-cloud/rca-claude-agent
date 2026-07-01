@@ -22,6 +22,7 @@ from dataclasses import asdict
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from .app_db import query_postgres as _query_postgres
+from .app_mongo import query_mongo as _query_mongo
 from .architecture import search_architecture as _search_arch
 from .gitlab_client import GitLabClient, GitLabError
 from .graph_store import load_repo_graph
@@ -248,12 +249,31 @@ def build_rca_server(client: GitLabClient):
     async def query_users_db(args):
         return _ok(_query_postgres(args["sql"]))
 
+    @tool("query_app_data",
+          "Read-only MongoDB lookup against the business documents (GSTR-3B "
+          "returns, e-invoice/e-way-bill docs, import jobs, autofill snapshots) — "
+          "the GROUND TRUTH for confirming a data-cause hypothesis (is this "
+          "snapshot doc missing? is a field on this return null?). Pass `collection` "
+          "and a JSON `filter` (e.g. {\"gstin\":\"...\",\"ret_period\":\"052026\"}); "
+          "optional `projection` (JSON) and `limit`. find-only — no writes, and "
+          "$where/$out/$merge are rejected. Results are PII-masked (raw customer "
+          "values redacted to <present>/<empty>), so reason about presence/shape. "
+          "Returns 'not configured' if no DB creds — then skip it.",
+          {"collection": str, "filter": str, "projection": str, "limit": int})
+    async def query_app_data(args):
+        return _ok(_query_mongo(
+            args["collection"],
+            args.get("filter") or "{}",
+            args.get("projection") or "",
+            int(args.get("limit") or 20),
+        ))
+
     tools = [parse_stack_trace, route_repo, fetch_file_lines, git_blame,
              get_commit, merge_requests_for_commit,
              find_callers, find_dependents, get_subgraph, graph_has_edge,
              search_symbols, search_code, search_code_local, search_architecture, get_repo_summary,
              web_search,
-             search_nr_errors, search_nr_logs, query_nr, query_users_db]
+             search_nr_errors, search_nr_logs, query_nr, query_users_db, query_app_data]
     server = create_sdk_mcp_server(name="rca", version="0.1.0", tools=tools)
     tool_names = [
         "mcp__rca__parse_stack_trace",
@@ -276,5 +296,6 @@ def build_rca_server(client: GitLabClient):
         "mcp__rca__search_nr_logs",
         "mcp__rca__query_nr",
         "mcp__rca__query_users_db",
+        "mcp__rca__query_app_data",
     ]
     return server, tool_names

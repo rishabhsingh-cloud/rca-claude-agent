@@ -43,12 +43,14 @@ _SAFE_COLUMNS = {
 # Column-name fragments treated as PII -> value fully masked. Substring match,
 # case-insensitive (so "user_email", "billing_address", "gstin" all hit).
 _PII_COLUMN_FRAGMENTS = {
-    "name", "email", "phone", "mobile", "contact", "address", "gstin", "gst_no",
+    "name", "email", "phone", "mobile", "contact", "address", "gstin", "gstn", "gst_no",
     "pan", "aadhaar", "aadhar", "dob", "birth", "password", "passwd", "secret",
     "token", "api_key", "apikey", "otp", "bank", "account_no", "ifsc", "card",
     # hardened for the org / suborg / user tables (credentials + tax identifiers)
     "username", "vat_number", "cin", "client_id", "sign", "whitelist",
     "turnover", "identity", "user_ref", "pincode", "zipcode",
+    # secrets / crypto material seen in the Mongo business docs (app/session keys)
+    "key", "sek", "encrypt", "cipher", "salt", "nonce", "credential", "session",
 }
 
 # Value-pattern masking (defense in depth) -> applied to every string cell.
@@ -57,6 +59,7 @@ _PAN_RE = re.compile(r"\b[A-Z]{5}\d{4}[A-Z]\b")
 _EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
 _PHONE_RE = re.compile(r"\b(?:\+?91[-\s]?)?[6-9]\d{9}\b")
 _AADHAAR_RE = re.compile(r"\b\d{4}\s?\d{4}\s?\d{4}\b")
+_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
 
 def _extra_pii_columns() -> set[str]:
@@ -81,6 +84,7 @@ def _mask_value(val: str) -> str:
     out = _AADHAAR_RE.sub("****-****-****", out)
     out = _PHONE_RE.sub("**********", out)
     out = _EMAIL_RE.sub(lambda m: m.group(0)[0] + "***@***", out)
+    out = _IPV4_RE.sub("<ip>", out)
     return out
 
 

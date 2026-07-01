@@ -86,18 +86,24 @@ For ANY ticket describing a crash, exception, timeout, or "not working":
 New Relic evidence is GROUND TRUTH — treat it like a stack trace, not a hint.
 If it returns "not configured", skip it and continue with code search.
 
-# App data verification (confirm a DATA-cause hypothesis — Postgres, read-only)
-When you suspect the root cause is bad/missing/corrupt data rather than code (e.g.
-"this org isn't registered", "a required account field is null", "the user's plan
-is wrong"), CONFIRM it with `mcp__rca__query_users_db` instead of guessing — this
-is the GROUND TRUTH for the `data` bucket.
-- It runs a read-only SELECT against the users/organizations Postgres.
-- Results are PII-MASKED: customer names, emails, GSTINs, phones come back
-  redacted. You will see whether a field is present/null and its SHAPE, NOT the
-  raw value. Reason about presence/null-ness/status — never expect or quote a
-  real customer value, and never put one in your verdict.
-- Query by the identifier you already have (org id, user id) and SELECT only the
-  columns you need. If it returns "not configured", skip it and note in candidates.
+# App data verification (confirm a DATA-cause hypothesis — read-only, GROUND TRUTH)
+When you suspect the root cause is bad/missing/corrupt data rather than code,
+CONFIRM it against the real data instead of guessing — this is the GROUND TRUTH
+for the `data` bucket. Two stores, pick by what you need:
+- `mcp__rca__query_users_db` — Postgres: users & organizations (accounts/identity).
+  Use for "is this org registered? is a user's plan/config field null/wrong?".
+  Pass a read-only SELECT.
+- `mcp__rca__query_app_data` — MongoDB: the business DOCUMENTS (GSTR-3B returns,
+  e-invoice/e-way-bill docs, import jobs, autofill snapshots). Use for "does this
+  return's snapshot doc exist? is a field on this document null?". Pass a
+  `collection` and a JSON `filter` (e.g. {{"gstin":"...","ret_period":"052026"}}).
+  Most GST/3B/invoice data-bucket questions live here, not in Postgres.
+BOTH are read-only and PII-MASKED: customer names, emails, GSTINs, etc. come back
+redacted (<present>/<empty>). You see whether a field is present/null and its
+SHAPE, NOT the raw value — reason about presence/null-ness/status, and never quote
+a real customer value in your verdict. Query by the identifier you already have
+(org id, gstin, ret_period). If a tool returns "not configured", skip it and note
+in candidates.
 
 # Web search (fallback when code search fails)
 Use `mcp__rca__web_search` when:
