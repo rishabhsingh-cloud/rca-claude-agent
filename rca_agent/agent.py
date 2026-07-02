@@ -149,6 +149,22 @@ def _looks_like_verdict(text: str) -> bool:
         {"confidence", "probable_root_cause", "triage"} & parsed.keys())
 
 
+def _parse_cause_categories(d: dict) -> list[CauseCategory]:
+    """Read `cause_categories` (list). Falls back to the legacy single
+    `cause_category` key for older stored verdicts. Keeps only valid values,
+    de-duplicated in order; defaults to [UNKNOWN]."""
+    valid = {c.value for c in CauseCategory}
+    raw = d.get("cause_categories")
+    if not isinstance(raw, list):
+        one = d.get("cause_category")           # legacy shape
+        raw = [one] if one else []
+    out: list[CauseCategory] = []
+    for v in raw:
+        if v in valid and CauseCategory(v) not in out:
+            out.append(CauseCategory(v))
+    return out or [CauseCategory.UNKNOWN]
+
+
 def parse_verdict(text: str, ticket_key: str) -> Verdict:
     """Best-effort parse of the agent's JSON output into a Verdict for rendering.
 
@@ -184,9 +200,7 @@ def parse_verdict(text: str, ticket_key: str) -> Verdict:
         probable_root_cause=d.get("probable_root_cause", ""),
         headline=d.get("headline", ""),
         plain_summary=d.get("plain_summary", ""),
-        cause_category=CauseCategory(d["cause_category"])
-        if d.get("cause_category") in {c.value for c in CauseCategory}
-        else CauseCategory.UNKNOWN,
+        cause_categories=_parse_cause_categories(d),
         evidence_chain=[
             EvidenceLink(kind=e["kind"], ref=e["ref"], detail=e["detail"],
                          url=e.get("url", ""))

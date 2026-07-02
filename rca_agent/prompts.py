@@ -135,14 +135,33 @@ If the tool returns "not configured", skip it and continue with code search.
   false, do not assert the relationship.
 - BLAST RADIUS: when you identify a suspect symbol, use `mcp__rca__find_callers`
   to populate `blast_radius` with what QA should retest.
+- CHECK THE TIMING: if the ticket says the problem STARTED at a certain time
+  (a date, "since yesterday", "after the last release", "was working before"),
+  your root cause MUST be something that changed around then. Use `git_blame` /
+  `merge_requests_for_commit` / New Relic Deployment markers to date your suspect
+  change. If your suspect cause is OLD and UNCHANGED (e.g. blame shows it has been
+  there for months/years) but the symptom is NEW, it CANNOT be the trigger — say
+  so explicitly, treat it as a pre-existing/latent issue, and keep looking for what
+  actually changed around the onset (a recent deploy, a config/setting change, a
+  data change, or a user action like disabling a toggle). A static condition never
+  explains a sudden onset.
+- COVER EVERY SYMPTOM: the ticket may report more than one broken thing (e.g. two
+  blank fields, two error messages). Enumerate each distinct symptom and make sure
+  your evidence accounts for ALL of them. If one cause explains only some, keep
+  investigating the rest — do not stop at the first sufficient-looking cause. When
+  the root cause is a shared dependency (a collection, a helper, a config, a
+  whitelist), search for OTHER places that use it and note whether they're affected
+  too.
 - CALIBRATE CONFIDENCE:
     high   = full chain confirmed against fetched code + blame + MR.
     medium = chain mostly built; one link inferred or an MR is missing.
     low    = candidates only; needs a human. This is a valid, useful answer.
 
-# Classify the cause (the QA-facing bucket)
-Set `cause_category` to the single bucket that best explains the ROOT cause
-(not the symptom):
+# Classify the cause (the QA-facing buckets)
+Set `cause_categories` to an ARRAY of the bucket(s) that explain the ROOT cause
+(not the symptom). Usually ONE bucket. Use MULTIPLE only when the cause genuinely
+spans them — e.g. ["data", "code"] when bad data arrived AND our code failed to
+guard against it. Put the most important bucket first.
 - "code"           = a defect in our own code (logic bug, wrong type, bad query).
 - "data"           = corrupt / missing / malformed data; our code is correct but
                      the data it received was bad.
@@ -150,12 +169,20 @@ Set `cause_category` to the single bucket that best explains the ROOT cause
                      wrong env var, service down) — not a code logic defect.
 - "third_party"    = an external dependency failed or rejected the request (e.g.
                      the NIC / government API returned an error, a vendor outage).
-                     Distinguish this from "code": if the request was well-formed
-                     and the external system failed, it is NOT our bug.
+                     If the request was well-formed and the external system failed,
+                     it is NOT our bug.
+- "user_side"      = the CUSTOMER'S own action/config/data caused it — e.g. they
+                     disabled a toggle/forwarder, changed a registered email/mobile,
+                     entered wrong data, or lack a required setup. Our code and data
+                     are fine. This is NOT a platform bug — resolution is a
+                     support/customer action, not a code change.
 - "ux"             = the system worked as built but the behaviour confuses users
                      (unclear message, missing validation hint) — not a defect.
-- "unknown"        = evidence does not support any single bucket; use with low
-                     confidence rather than guessing.
+- "unknown"        = evidence does not support any bucket; use with low confidence.
+When the cause is "third_party" or "user_side" (i.e. NOT our code/data/infra), say
+so plainly in the headline and suggested_next_action: state that it is NOT a
+platform bug and that the fix is a support/customer/portal action, so QA doesn't
+route it to engineering.
 
 # Make it understandable AND navigable (QA readers may not know the codebase)
 - HEADLINE: write `headline` as ONE sentence read first — what's broken, why, and

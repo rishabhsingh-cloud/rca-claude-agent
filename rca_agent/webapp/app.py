@@ -44,14 +44,14 @@ _DATE_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 @app.get("/api/tickets")
 def list_tickets(from_date: str = "", to_date: str = "", include_resolved: bool = False):
-    """Fetch AUT bug tickets from Jira (optionally date-filtered) and sync locally.
+    """Fetch AUT bug/incident tickets from Jira (optionally date-filtered) and sync locally.
 
     from_date / to_date are YYYY-MM-DD (inclusive). Anything not matching that
     exact shape is ignored, so the values can't be used to inject JQL.
     include_resolved=True drops the 'not Done' filter so closed tickets show too.
     """
     jira = _jira()
-    clauses = ["project = AUT", "issuetype = Bug"]
+    clauses = ["project = AUT", "issuetype in (Bug, Incident)"]
     if not include_resolved:
         clauses.append("statusCategory != Done")
     if _DATE_RE.match(from_date):

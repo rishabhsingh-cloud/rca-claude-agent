@@ -35,6 +35,7 @@ class CauseCategory(str, Enum):
     DATA = "data"                    # data corruption / bad or missing data
     INFRASTRUCTURE = "infrastructure"  # infra / environment / deployment
     THIRD_PARTY = "third_party"      # external dependency (e.g. NIC, a vendor API)
+    USER_SIDE = "user_side"          # the customer's own action/config/data — not our bug
     UX = "ux"                        # UX / usability issue, not a defect
     UNKNOWN = "unknown"              # cannot be determined from the evidence
 
@@ -57,8 +58,10 @@ class Verdict:
     # Jargon-free explanation for someone who does NOT know the codebase: what is
     # broken (user-visible), where it comes from, and why — in plain language.
     plain_summary: str = ""
-    # Which bucket the root cause falls into (code / data / infra / 3rd-party / UX).
-    cause_category: CauseCategory = CauseCategory.UNKNOWN
+    # Which bucket(s) the root cause falls into. Usually one, but a ticket can
+    # span more than one (e.g. bad data + a code path that doesn't guard it).
+    cause_categories: list[CauseCategory] = field(
+        default_factory=lambda: [CauseCategory.UNKNOWN])
     evidence_chain: list[EvidenceLink] = field(default_factory=list)
     is_regression: bool | None = None
     introducing_mr: str | None = None      # MR url or "!iid"
@@ -74,7 +77,7 @@ class Verdict:
         d = asdict(self)
         d["triage"] = self.triage.value
         d["confidence"] = self.confidence.value
-        d["cause_category"] = self.cause_category.value
+        d["cause_categories"] = [c.value for c in self.cause_categories]
         return d
 
     @staticmethod
@@ -84,14 +87,17 @@ class Verdict:
             "type": "object",
             "additionalProperties": False,
             "required": [
-                "ticket", "headline", "cause_category", "probable_root_cause",
+                "ticket", "headline", "cause_categories", "probable_root_cause",
                 "plain_summary", "evidence_chain", "is_regression", "triage",
                 "confidence", "suggested_next_action",
             ],
             "properties": {
                 "ticket": {"type": "string"},
                 "headline": {"type": "string"},
-                "cause_category": {"type": "string", "enum": [c.value for c in CauseCategory]},
+                "cause_categories": {
+                    "type": "array", "minItems": 1,
+                    "items": {"type": "string", "enum": [c.value for c in CauseCategory]},
+                },
                 "probable_root_cause": {"type": "string"},
                 "plain_summary": {"type": "string"},
                 "evidence_chain": {

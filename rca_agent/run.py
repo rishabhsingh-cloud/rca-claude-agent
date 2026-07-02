@@ -32,7 +32,16 @@ def _load(args, settings) -> tuple[str, str]:
     if args.ticket_file:
         return load_ticket_file(Path(args.ticket_file))
     # Live Jira (if JIRA_* configured) fetches by key; else reads the fixture.
-    return build_ticket_source(settings).get(args.ticket)
+    src = build_ticket_source(settings)
+    if getattr(args, "no_comments", False):
+        # Match the webapp: strip ALL comments so the run is independent (the
+        # agent isn't influenced by prior human/RCA guesses). Fall back gracefully
+        # for sources whose get() doesn't accept the flag (e.g. the mock source).
+        try:
+            return src.get(args.ticket, drop_all_comments=True)
+        except TypeError:
+            return src.get(args.ticket)
+    return src.get(args.ticket)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -53,6 +62,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", action="store_true", help="print raw verdict JSON")
     ap.add_argument("--brief", action="store_true",
                     help="print the short QA view (headline + summary + key links)")
+    ap.add_argument("--no-comments", action="store_true",
+                    help="strip ALL ticket comments (match the webapp — independent, "
+                         "comment-blind RCA)")
     args = ap.parse_args(argv)
 
     settings = get_settings()
