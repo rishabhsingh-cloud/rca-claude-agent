@@ -37,13 +37,31 @@ def index():
     return FileResponse(STATIC / "index.html")
 
 
+import re as _re
+
+_DATE_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
 @app.get("/api/tickets")
-def list_tickets():
-    """Fetch this month's bug tickets from Jira and sync into local DB."""
+def list_tickets(from_date: str = "", to_date: str = "", include_resolved: bool = False):
+    """Fetch AUT bug tickets from Jira (optionally date-filtered) and sync locally.
+
+    from_date / to_date are YYYY-MM-DD (inclusive). Anything not matching that
+    exact shape is ignored, so the values can't be used to inject JQL.
+    include_resolved=True drops the 'not Done' filter so closed tickets show too.
+    """
     jira = _jira()
-    jql = ("issuetype = Bug AND statusCategory != Done "
-           "AND created >= startOfMonth() ORDER BY created DESC")
+    clauses = ["project = AUT", "issuetype = Bug"]
+    if not include_resolved:
+        clauses.append("statusCategory != Done")
+    if _DATE_RE.match(from_date):
+        clauses.append(f'created >= "{from_date}"')
+    if _DATE_RE.match(to_date):
+        # include the whole 'to' day
+        clauses.append(f'created <= "{to_date} 23:59"')
+    jql = " AND ".join(clauses) + " ORDER BY created DESC"
     issues = jira.search(jql, max_results=100)
+    keys = []
     for i in issues:
         key = i["key"]
         fields = i.get("fields", {})
@@ -54,7 +72,11 @@ def list_tickets():
             desc = flatten_adf(desc)
         created_at = fields.get("created", "")
         store.upsert_ticket(key, title, desc, created_at)
-    return store.get_all_tickets()
+        keys.append(key)
+    # Return ONLY the tickets just fetched (AUT + this date range) with their
+    # stored RCA state — not the whole DB, which still holds old non-AUT rows
+    # from earlier syncs.
+    return [t for k in keys if (t := store.get_ticket(k))]
 
 
 # How long a single investigation may run before we give up and mark it failed.
