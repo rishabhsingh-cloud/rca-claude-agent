@@ -26,9 +26,11 @@ from .app_mongo import query_mongo as _query_mongo
 from .architecture import search_architecture as _search_arch
 from .gitlab_client import GitLabClient, GitLabError
 from .graph_store import load_repo_graph
+from .newrelic import find_request_ids as _find_request_ids
 from .newrelic import query_nr as _query_nr
 from .newrelic import search_nr_errors as _search_nr_errors
 from .newrelic import search_nr_logs as _search_nr_logs
+from .newrelic import trace_request as _trace_request
 from .routing import read_summary as _read_summary
 from .routing import route_repo as _route_repo
 from .local_search import search_code_local as _search_code_local
@@ -237,6 +239,26 @@ def build_rca_server(client: GitLabClient):
     async def query_nr(args):
         return _ok(_query_nr(args["nrql"]))
 
+    @tool("find_request_ids",
+          "PRODUCTION LOG LOOKUP (New Relic). From a business identifier you "
+          "already have — a GSTIN, e-way-bill / IRN number, document number, an "
+          "endpoint path, or an error string — find the Mi-Requestid(s) of the "
+          "matching request(s). Use this FIRST when a ticket has no request id, "
+          "then pass a returned id to trace_request. hours_ago defaults to 24.",
+          {"query": str, "hours_ago": int})
+    async def find_request_ids(args):
+        return _ok(_find_request_ids(args["query"], int(args.get("hours_ago") or 24)))
+
+    @tool("trace_request",
+          "PRODUCTION REQUEST TRACE (New Relic). Follow ONE Mi-Requestid across "
+          "services (Router -> eDoc -> external/NIC) in time order. Returns each "
+          "hop: service, method, path/url, HTTP status_code, timing, NIC source — "
+          "GROUND TRUTH for WHERE a request actually failed. Log lines are "
+          "PII-masked. Get the id from find_request_ids first.",
+          {"request_id": str, "hours_ago": int})
+    async def trace_request(args):
+        return _ok(_trace_request(args["request_id"], int(args.get("hours_ago") or 24)))
+
     @tool("query_users_db",
           "Read-only Postgres lookup against the users/organizations data — the "
           "GROUND TRUTH for account/identity questions (is this org registered? is "
@@ -273,7 +295,8 @@ def build_rca_server(client: GitLabClient):
              find_callers, find_dependents, get_subgraph, graph_has_edge,
              search_symbols, search_code, search_code_local, search_architecture, get_repo_summary,
              web_search,
-             search_nr_errors, search_nr_logs, query_nr, query_users_db, query_app_data]
+             search_nr_errors, search_nr_logs, query_nr,
+             find_request_ids, trace_request, query_users_db, query_app_data]
     server = create_sdk_mcp_server(name="rca", version="0.1.0", tools=tools)
     tool_names = [
         "mcp__rca__parse_stack_trace",
@@ -295,6 +318,8 @@ def build_rca_server(client: GitLabClient):
         "mcp__rca__search_nr_errors",
         "mcp__rca__search_nr_logs",
         "mcp__rca__query_nr",
+        "mcp__rca__find_request_ids",
+        "mcp__rca__trace_request",
         "mcp__rca__query_users_db",
         "mcp__rca__query_app_data",
     ]

@@ -86,6 +86,21 @@ For ANY ticket describing a crash, exception, timeout, or "not working":
 New Relic evidence is GROUND TRUTH — treat it like a stack trace, not a hint.
 If it returns "not configured", skip it and continue with code search.
 
+# Trace the actual request (New Relic logs — read WHAT failed, don't guess)
+When a ticket concerns a specific failing operation (an e-invoice/e-way-bill call,
+a GST-portal action) and you have any business identifier — a GSTIN, an
+e-way-bill / IRN number, a document number, an endpoint, or an error string:
+1. `mcp__rca__find_request_ids` with that identifier → the Mi-Requestid(s) of the
+   matching production request(s). (You will NOT have a request id from the
+   ticket — this is how you get one.)
+2. `mcp__rca__trace_request` with a returned id → the request's path across
+   services (Router -> eDoc -> external/NIC) in order, with each hop's URL, HTTP
+   status_code and timing. The hop whose status_code is not 2xx is WHERE it broke.
+This is GROUND TRUTH for a failing request — use it to confirm the failing step
+and which side failed (our service vs the external/NIC call) before blaming code.
+Log lines are PII-masked. If either returns "not configured"/empty, widen
+hours_ago or fall back to code search, and note the gap in candidates.
+
 # App data verification (confirm a DATA-cause hypothesis — read-only, GROUND TRUTH)
 When you suspect the root cause is bad/missing/corrupt data rather than code,
 CONFIRM it against the real data instead of guessing — this is the GROUND TRUTH
