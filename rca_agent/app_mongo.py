@@ -30,6 +30,10 @@ from .app_db import _is_pii_column, _mask_value
 
 _DOC_CAP = 50
 _TIMEOUT_MS = 8000
+# Hard per-query cap: a broad find over a huge/unindexed collection must abort
+# fast rather than hang the agent. .limit() caps RESULTS, not the server SCAN —
+# this caps the scan time.
+_QUERY_TIMEOUT_MS = 5000
 
 # Operators that can run server-side JS or WRITE — never allowed in a filter.
 _FORBIDDEN_OPS = {"$where", "$function", "$accumulator", "$out", "$merge", "$expr"}
@@ -111,7 +115,12 @@ def query_mongo(collection: str, filter_str: str = "{}", projection_str: str = "
         db = client[db_name] if db_name else client.get_default_database()
         if db is None:
             return {"error": "no database specified — set APP_MONGO_DB or pass database"}
-        docs = [_mask_doc(d) for d in db[collection].find(filt, proj).limit(n)]
+        docs = [_mask_doc(d) for d in
+                db[collection].find(filt, proj).limit(n).max_time_ms(_QUERY_TIMEOUT_MS)]
+    except pymongo.errors.ExecutionTimeout:
+        return {"error": "query exceeded the time limit — the filter is too broad "
+                         "for this collection. Narrow it with an indexed field "
+                         "(e.g. gstin + ret_period, or reference_id) and retry."}
     except Exception as e:
         return {"error": f"Mongo query failed: {type(e).__name__}: {str(e)[:200]}"}
     finally:

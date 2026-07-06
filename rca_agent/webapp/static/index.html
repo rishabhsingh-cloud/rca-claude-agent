@@ -362,10 +362,42 @@ function causeBadges(v) {
   return `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">${chips}</div>`;
 }
 
+// The simple QA call — MUST match schema.py verdict_label() exactly.
+// our code/data/infra -> BUG Accepted; customer/vendor -> Not a BUG;
+// thin evidence (low confidence / insufficient) -> Needs review.
+function verdictLabel(v) {
+  const conf = (v.confidence || '').toLowerCase();
+  const triage = (v.triage || '').toLowerCase();
+  if (triage === 'insufficient_evidence' || conf === 'low') return 'Needs review';
+  let cats = Array.isArray(v.cause_categories) ? v.cause_categories
+           : (v.cause_category ? [v.cause_category] : []);
+  const has = list => list.some(c => cats.includes(c));
+  if (has(['code', 'data', 'infrastructure'])) return 'BUG Accepted';
+  if (has(['user_side', 'third_party', 'ux'])) return 'Not a BUG';
+  return 'Needs review';
+}
+
+const VERDICT_COLORS = {
+  'BUG Accepted': {bg: '#ffebe6', fg: '#bf2600'},   // red — it's our bug
+  'Not a BUG':    {bg: '#e3fcef', fg: '#006644'},   // green — not our problem
+  'Needs review': {bg: '#fffae6', fg: '#974f0c'},   // amber — a human must decide
+};
+
 function renderRcaContent(ticket) {
   if (ticket.bot_rca_json) {
     const v = JSON.parse(ticket.bot_rca_json);
     let html = '';
+    // Disclaimer banner + the simple VERDICT call, shown first on every RCA.
+    // Both are stored inside the RCA (schema.py to_dict); fall back to computing
+    // them for older RCAs saved before that field existed.
+    const disclaimer = v.disclaimer || 'Automated RCA — verify before acting';
+    html += `<div style="font-size:11px;color:#8993a4;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px;">⚠ ${escHtml(disclaimer)}</div>`;
+    const label = v.verdict_label || verdictLabel(v);
+    const lc = VERDICT_COLORS[label] || VERDICT_COLORS['Needs review'];
+    html += `<div style="margin-bottom:12px;">
+      <span style="font-size:12px;font-weight:700;color:#5e6c84;">VERDICT: </span>
+      <span style="display:inline-block;padding:2px 12px;border-radius:3px;font-size:13px;font-weight:700;background:${lc.bg};color:${lc.fg};">${label}</span>
+    </div>`;
     if (v.headline) html += `<p style="font-weight:600;margin-bottom:6px;">${escHtml(v.headline)}</p>`;
     html += causeBadges(v);
     if (v.plain_summary) html += `<p style="margin-bottom:10px;">${escHtml(v.plain_summary)}</p>`;

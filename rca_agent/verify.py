@@ -90,6 +90,13 @@ def _parse_mr_url(url: str) -> tuple[str, int] | None:
     return (m.group(1), int(m.group(2))) if m else None
 
 
+def _parse_blob_url(url: str) -> tuple[str, str, str] | None:
+    """Return (project_path, ref, file_path) from a GitLab blob URL, or None.
+    e.g. .../mastersindia/gst-enterprise-service/-/blob/<sha>/path/to/f.py#L27"""
+    m = re.search(r'/([^/]+/[^/]+)/-/blob/([^/]+)/(.+?)(?:#|$)', url)
+    return (m.group(1), m.group(2), m.group(3)) if m else None
+
+
 def _strip_line(ref: str) -> str:
     """'path/to/file.py:42' -> 'path/to/file.py'"""
     return ref.rsplit(":", 1)[0] if re.search(r':\d+$', ref) else ref
@@ -108,12 +115,22 @@ def verify_verdict(verdict: Verdict, client: GitLabClient) -> VerificationResult
     for ev in verdict.evidence_chain:
         if ev.kind in ("file_content", "stack_frame"):
             path = _strip_line(ev.ref)
-            if repos_dir:
-                exists = _file_exists_in_repos(path, repos_dir)
-                result.checks[path] = CheckResult(
-                    passed=exists,
-                    reason="found in cloned repos" if exists else "not found in any cloned repo",
-                )
+            parsed = _parse_blob_url(ev.url) if ev.url else None
+            if repos_dir and _file_exists_in_repos(path, repos_dir):
+                result.checks[path] = CheckResult(True, "found in cloned repos")
+            elif parsed:
+                # No local clone (or not found there): confirm the file exists via
+                # the GitLab API — the same source the agent read from. This is why
+                # a run without cloned repos no longer fails every file check.
+                proj, ref, fpath = parsed
+                try:
+                    client.get_file_lines(proj, ref, fpath, 1, 1)
+                    result.checks[path] = CheckResult(True, "file exists in GitLab")
+                except Exception as e:
+                    result.checks[path] = CheckResult(False, f"file not found in GitLab: {str(e)[:60]}")
+            elif repos_dir:
+                result.checks[path] = CheckResult(False, "not found in any cloned repo")
+            # else: no clone AND no parseable URL -> cannot verify -> skip (don't penalize)
 
         elif ev.kind in ("commit", "blame"):
             if not ev.url:

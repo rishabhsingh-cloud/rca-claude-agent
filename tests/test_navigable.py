@@ -62,8 +62,13 @@ def test_verdict_to_adf_has_summary_and_collapsible_details():
     from rca_agent.schema import verdict_to_adf
     doc = verdict_to_adf(_full_verdict())
     assert doc["type"] == "doc"
-    # first visible node carries the headline
-    assert "Liability screen reads" in doc["content"][0]["content"][0]["text"]
+    # first visible node is the disclaimer banner; second is the VERDICT line.
+    assert "Automated RCA — verify before acting" in doc["content"][0]["content"][0]["text"]
+    verdict_line = "".join(n["text"] for n in doc["content"][1]["content"])
+    assert verdict_line.startswith("VERDICT: ")
+    assert verdict_line.split("VERDICT: ", 1)[1] in ("BUG Accepted", "Not a BUG", "Needs review")
+    # headline follows the banner + verdict
+    assert "Liability screen reads" in doc["content"][2]["content"][0]["text"]
     # there's a collapsible expand block titled "RCA details ..."
     expand = next(n for n in doc["content"] if n["type"] == "expand")
     assert "RCA details" in expand["attrs"]["title"]

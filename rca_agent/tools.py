@@ -23,6 +23,7 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from .app_db import query_postgres as _query_postgres
 from .app_mongo import query_mongo as _query_mongo
+from .error_lookup import find_error_reason as _find_error_reason
 from .architecture import search_architecture as _search_arch
 from .gitlab_client import GitLabClient, GitLabError
 from .graph_store import load_repo_graph
@@ -271,6 +272,25 @@ def build_rca_server(client: GitLabClient):
     async def query_users_db(args):
         return _ok(_query_postgres(args["sql"]))
 
+    @tool("find_error_reason",
+          "EXACT-ERROR LOOKUP (read-only, GROUND TRUTH). Fetch the REAL reason "
+          "behind a generic failure message ('Due to Wrong Input Data', 'contact "
+          "support', 'something went wrong'). The true error is NOT in New Relic or "
+          "Postgres — it is in domain-specific Mongo stores, and this ONE tool checks "
+          "them all: GSTR-1 import exceptions, GST-portal/NIC fetch errors, "
+          "reconciliation errors, and rejected import rows. Use it for ANY import / "
+          "portal-fetch / reconciliation failure ticket BEFORE concluding the real "
+          "error is unavailable. Pass whatever you have: `gstin`, `ret_period` (e.g. "
+          "'062026'), `reference_id` (import job id) — at least one of gstin/"
+          "reference_id is required. Using a GSTIN as a lookup arg is allowed (it will "
+          "not appear in your verdict). Results are PII-masked; error_case 'gov' means "
+          "the government/NIC portal failed (third_party, not our bug).",
+          {"gstin": str, "ret_period": str, "reference_id": str})
+    async def find_error_reason(args):
+        return _ok(_find_error_reason(
+            args.get("gstin", ""), args.get("ret_period", ""),
+            args.get("reference_id", "")))
+
     @tool("query_app_data",
           "Read-only MongoDB lookup against the business documents (GSTR-3B "
           "returns, e-invoice/e-way-bill docs, import jobs, autofill snapshots) — "
@@ -296,7 +316,8 @@ def build_rca_server(client: GitLabClient):
              search_symbols, search_code, search_code_local, search_architecture, get_repo_summary,
              web_search,
              search_nr_errors, search_nr_logs, query_nr,
-             find_request_ids, trace_request, query_users_db, query_app_data]
+             find_request_ids, trace_request, query_users_db,
+             find_error_reason, query_app_data]
     server = create_sdk_mcp_server(name="rca", version="0.1.0", tools=tools)
     tool_names = [
         "mcp__rca__parse_stack_trace",
@@ -321,6 +342,7 @@ def build_rca_server(client: GitLabClient):
         "mcp__rca__find_request_ids",
         "mcp__rca__trace_request",
         "mcp__rca__query_users_db",
+        "mcp__rca__find_error_reason",
         "mcp__rca__query_app_data",
     ]
     return server, tool_names

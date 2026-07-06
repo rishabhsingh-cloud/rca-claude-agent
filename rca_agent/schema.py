@@ -78,6 +78,10 @@ class Verdict:
         d["triage"] = self.triage.value
         d["confidence"] = self.confidence.value
         d["cause_categories"] = [c.value for c in self.cause_categories]
+        # Code-decided fields carried INSIDE every RCA, so all surfaces (webapp,
+        # Jira, CLI) show the same disclaimer + verdict without recomputing.
+        d["disclaimer"] = DISCLAIMER
+        d["verdict_label"] = verdict_label(self)
         return d
 
     @staticmethod
@@ -131,6 +135,29 @@ class Verdict:
 
 def _regression_str(v: Verdict) -> str:
     return ("yes" if v.is_regression else "no" if v.is_regression is not None else "unknown")
+
+
+# The fixed disclaimer shown on top of every RCA, everywhere.
+DISCLAIMER = "Automated RCA — verify before acting"
+
+
+def verdict_label(v: Verdict) -> str:
+    """The one-line QA call, derived automatically from the cause + how sure we
+    are. Returns 'BUG Accepted', 'Not a BUG', or 'Needs review'.
+
+    'Needs review' whenever evidence is too thin to commit either way (low
+    confidence or insufficient evidence) — we never assert a confident call we
+    can't back up. Otherwise: any of our own code/data/infra in the cause means
+    it's our problem ('BUG Accepted'); a customer action or an external/vendor
+    (govt/NIC) cause means it's 'Not a BUG'."""
+    if v.triage is Triage.INSUFFICIENT_EVIDENCE or v.confidence is Confidence.LOW:
+        return "Needs review"
+    cats = set(v.cause_categories)
+    if cats & {CauseCategory.CODE, CauseCategory.DATA, CauseCategory.INFRASTRUCTURE}:
+        return "BUG Accepted"
+    if cats & {CauseCategory.USER_SIDE, CauseCategory.THIRD_PARTY, CauseCategory.UX}:
+        return "Not a BUG"
+    return "Needs review"
 
 
 def _key_links(v: Verdict) -> list[EvidenceLink]:
@@ -211,6 +238,11 @@ def verdict_to_adf(v: Verdict) -> dict:
     status = f"{v.triage.value} · regression {_regression_str(v)}"
 
     visible = [
+        # Disclaimer banner — first thing the reader sees on every posted RCA.
+        _adf_para(_adf_text("⚠ " + DISCLAIMER, [{"type": "strong"}])),
+        # The simple QA call, right under the banner.
+        _adf_para(_adf_text("VERDICT: ", [{"type": "strong"}]),
+                  _adf_text(verdict_label(v), [{"type": "strong"}])),
         _adf_para(_adf_text(v.headline or v.probable_root_cause, [{"type": "strong"}])),
         _adf_para(_adf_text(v.plain_summary)),
         _adf_para(_adf_text(status, [{"type": "em"}])),
@@ -230,8 +262,6 @@ def verdict_to_adf(v: Verdict) -> dict:
         detail.append(_adf_para(_adf_text("Retest: " + "; ".join(v.blast_radius))))
     if v.suggested_next_action:
         detail.append(_adf_para(_adf_text("Next action: " + v.suggested_next_action)))
-    detail.append(_adf_para(_adf_text("(Automated RCA — verify before acting.)",
-                                      [{"type": "code"}])))
 
     expand = {"type": "expand", "attrs": {"title": "RCA details — evidence trail"},
               "content": detail}

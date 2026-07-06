@@ -22,3 +22,6 @@ out/
 # private repos). NOT version-controlled here; built by the indexer / shipped to
 # the server separately.
 index/
+
+# Locally cloned repos used for fast code search — dev-only, never version this.
+repos/
