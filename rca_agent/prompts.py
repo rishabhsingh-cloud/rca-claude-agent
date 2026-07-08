@@ -263,6 +263,28 @@ Search for the EXACT error string in quotes first; then broaden if needed.
 - DON'T INVENT EDGES: if you claim "A calls B" or "B depends on A", it must come
   from the code graph. Check `mcp__rca__graph_has_edge` first; if it returns
   false, do not assert the relationship.
+- GREP THE RUNTIME STRING FIRST: the moment you extract an error message or a
+  literal value from runtime data (a New Relic log line, a DB row, a stored error
+  field), search the code for that EXACT string with `search_code_local` /
+  `search_code` BEFORE forming a hypothesis. The line that emits that string is
+  almost always the fix site — this is the single fastest path to the real cause.
+- TRACE BACK FROM THE ARTIFACT: when the symptom is a produced artifact — a report,
+  export, file, or screen with a MISSING or BLANK field/column — you MUST locate and
+  cite the code that GENERATES that artifact (the export/render/serialiser), not just
+  where the value is computed or stored. "The column is missing from the report" is
+  only solved by naming the report-building code.
+- NEGATIVE EVIDENCE IS NOT PROOF: an empty or failed search ("no references to X",
+  "not found") is UNVERIFIABLE — never a confirmed fact. Never choose a repo, a fix
+  location, or an "it's the frontend / other layer" conclusion from absence alone. If
+  you must cite a negative, record the EXACT pattern and paths you searched and treat
+  it as a gap, not evidence.
+- PICK THE LIVE DEFINITION: if a symbol has more than one definition, enumerate ALL
+  of them, prefer non-deprecated paths (skip `deprecated/`, `legacy/`, `old_`), and
+  confirm the one actually used (e.g. via `mcp__rca__find_callers`) before citing it.
+  Never base a verdict on dead code.
+- SCAN SIBLINGS BEFORE CONCLUDING: before finalizing a cause inside one module, check
+  its PARENT directory and sibling modules — a shared/base class next door often owns
+  the real behaviour. Don't camp in the first module you land in.
 - BLAST RADIUS: when you identify a suspect symbol, use `mcp__rca__find_callers`
   to populate `blast_radius` with what QA should retest.
 - CHECK THE TIMING: if the ticket says the problem STARTED at a certain time
