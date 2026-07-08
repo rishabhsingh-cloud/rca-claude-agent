@@ -106,6 +106,8 @@ class GitLabClient(Protocol):
 
     def get_merge_request(self, project: str, iid: int) -> MergeRequest | None: ...
 
+    def list_projects(self, search: str = "", limit: int = 100) -> list[dict]: ...
+
 
 # --- Mock implementation -------------------------------------------------------
 
@@ -172,6 +174,17 @@ class MockGitLabClient:
         out = [fp.relative_to(base).as_posix()
                for fp in base.rglob("*") if fp.suffix in exts]
         return sorted(out)
+
+    def list_projects(self, search: str = "", limit: int = 100) -> list[dict]:
+        if not self._dir.exists():
+            return []
+        out = []
+        for d in sorted(self._dir.iterdir()):
+            if d.is_dir():
+                proj = d.name.replace("__", "/")
+                if not search or search.lower() in proj.lower():
+                    out.append({"project": proj, "name": d.name, "description": ""})
+        return out[:limit]
 
     def search_blobs(self, project: str, ref: str, query: str,
                      limit: int = 20) -> list[dict]:
@@ -334,6 +347,16 @@ class RestGitLabClient:
         rows = self._get(ep, scope="blobs", search=query, ref=ref) or []
         return [{"path": r.get("path"), "startline": r.get("startline"),
                  "data": (r.get("data") or "").strip()[:200]} for r in rows[:limit]]
+
+    def list_projects(self, search: str = "", limit: int = 100) -> list[dict]:
+        # /projects?membership=true -> repos the token can read (path_with_namespace)
+        params = {"membership": "true", "simple": "true",
+                  "order_by": "last_activity_at", "per_page": min(int(limit), 100)}
+        if search:
+            params["search"] = search
+        rows = self._get("/projects", **params) or []
+        return [{"project": r.get("path_with_namespace"), "name": r.get("name"),
+                 "description": (r.get("description") or "")[:120]} for r in rows[:limit]]
 
     def blame_line(self, project: str, ref: str, path: str, line: int) -> Commit | None:
         # /repository/files/:file_path/blame?ref=  -> [{commit:{...}, lines:[...]}]

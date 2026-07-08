@@ -79,6 +79,13 @@ def list_tickets(from_date: str = "", to_date: str = "", include_resolved: bool 
     return [t for k in keys if (t := store.get_ticket(k))]
 
 
+@app.get("/api/rca_tickets")
+def list_rca_tickets():
+    """The Dev Agent tab's worklist: tickets that already have an RCA, read from
+    the local DB only (no Jira call). Clicking one lets a human run the fix agent."""
+    return store.get_tickets_with_rca()
+
+
 # How long a single investigation may run before we give up and mark it failed.
 # Cross-service / image tickets are slow; keep this generous but bounded so a
 # hung run can never wedge a row at 'running' forever.
@@ -161,6 +168,64 @@ def rca_status(key: str):
     return result
 
 
+@app.post("/api/tickets/{key}/suggest_fix")
+async def suggest_fix_endpoint(key: str):
+    """Phase 1 (dry-run): propose a minimal code fix for a completed RCA and return
+    the diff + rationale + syntax check. Writes NOTHING to GitLab. Human-initiated."""
+    import asyncio
+    from ..fix_agent import suggest_fix
+    ticket = store.get_ticket(key)
+    if not ticket or not ticket.get("bot_rca_json"):
+        raise HTTPException(400, "No RCA found for this ticket — run RCA first")
+    verdict = json.loads(ticket["bot_rca_json"])
+    s = get_settings()
+    client = build_client(s)
+    try:
+        # Multi-file fixes legitimately explore for ~4 min; keep this comfortably above
+        # the fix agent's own exploration budget (_MAX_TURNS) so a real run isn't killed
+        # mid-flight and reported as a timeout.
+        sug = await asyncio.wait_for(suggest_fix(verdict, client, s), timeout=420)
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "Fix suggestion timed out")
+    except Exception as e:  # noqa: BLE001 — surface any failure to the UI
+        raise HTTPException(500, f"{type(e).__name__}: {str(e)[:200]}")
+    # Persist so the suggestion survives a page refresh (it's a ~3-4 min run to
+    # regenerate). Cleared by reset_rca when the RCA is re-run.
+    result = sug.to_dict()
+    store.save_fix(key, json.dumps(result))
+    return result
+
+
+@app.post("/api/tickets/{key}/raise_mr")
+def raise_mr_endpoint(key: str):
+    """Phase 1b (WRITE): push a branch + open a DRAFT MR for the reviewed fix. Uses the
+    separate GITLAB_FIX_TOKEN bot (Developer role — cannot merge). Human-initiated."""
+    from ..fix_mr import raise_mr
+    ticket = store.get_ticket(key)
+    if not ticket or not ticket.get("bot_fix_json"):
+        raise HTTPException(400, "No fix suggestion found — run the dev agent first")
+    fix = json.loads(ticket["bot_fix_json"])
+    s = get_settings()
+    client = build_client(s)
+    res = raise_mr(key, fix, client)
+    if res.get("error"):
+        raise HTTPException(400, res["error"])
+    # Persist the MR result inside the stored fix so the UI still shows it after refresh.
+    fix["mr"] = res
+    store.save_fix(key, json.dumps(fix))
+    return res
+
+
+@app.post("/api/tickets/{key}/reject_fix")
+def reject_fix_endpoint(key: str):
+    """Discard the stored dry-run fix suggestion (reviewer rejected it). Local only —
+    writes nothing to GitLab, and does not touch any MR that may already be open."""
+    if not store.get_ticket(key):
+        raise HTTPException(404, "Ticket not found")
+    store.clear_fix(key)
+    return {"status": "cleared"}
+
+
 @app.get("/api/tickets/{key}/raw_attachments")
 def raw_attachments(key: str):
     """Debug: return raw attachment metadata from Jira."""
@@ -181,9 +246,10 @@ def get_attachments(key: str):
 
 @app.post("/api/tickets/{key}/reset")
 def reset_rca(key: str):
-    """Clear stored RCA so it can be re-run."""
+    """Clear stored RCA (and any fix built on it) so it can be re-run."""
     with store._conn() as con:
-        con.execute("UPDATE reviews SET bot_rca_json=NULL, status='pending' WHERE key=?", (key,))
+        con.execute("UPDATE reviews SET bot_rca_json=NULL, bot_fix_json=NULL, "
+                    "status='pending' WHERE key=?", (key,))
     return {"status": "reset"}
 
 

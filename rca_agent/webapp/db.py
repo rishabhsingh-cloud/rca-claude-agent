@@ -32,7 +32,7 @@ def init_db() -> None:
             )
         """)
         # migrate existing DBs that don't have these columns yet
-        for col in ("turns_used INTEGER", "error TEXT"):
+        for col in ("turns_used INTEGER", "error TEXT", "bot_fix_json TEXT"):
             try:
                 con.execute(f"ALTER TABLE reviews ADD COLUMN {col}")
             except sqlite3.OperationalError:
@@ -70,12 +70,39 @@ def get_all_tickets() -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def get_tickets_with_rca() -> list[dict]:
+    """Tickets that already have an RCA — the Dev Agent tab's worklist.
+    Most-recently-updated first; read from the local DB only (no Jira sync)."""
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM reviews WHERE bot_rca_json IS NOT NULL "
+            "ORDER BY updated_at DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def save_rca(key: str, rca_json: str, turns_used: int | None = None) -> None:
     with _conn() as con:
         con.execute("""
             UPDATE reviews SET bot_rca_json = ?, status = 'rca_ready',
             turns_used = ?, error = NULL, updated_at = datetime('now') WHERE key = ?
         """, (rca_json, turns_used, key))
+
+
+def save_fix(key: str, fix_json: str) -> None:
+    """Persist the latest dry-run fix suggestion so it survives a page refresh.
+    Kept separate from the RCA; cleared by reset_rca when the RCA is re-run so a
+    fix generated for an old verdict never lingers against a new one."""
+    with _conn() as con:
+        con.execute("UPDATE reviews SET bot_fix_json = ?, updated_at = datetime('now') "
+                    "WHERE key = ?", (fix_json, key))
+
+
+def clear_fix(key: str) -> None:
+    """Discard a stored fix suggestion (the reviewer rejected it). Local only."""
+    with _conn() as con:
+        con.execute("UPDATE reviews SET bot_fix_json = NULL, updated_at = datetime('now') "
+                    "WHERE key = ?", (key,))
 
 
 def mark_running(key: str) -> None:

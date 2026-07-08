@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Triage Agent</title>
+<title>MI Agent Dashboard</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -151,7 +151,11 @@
 <body>
 
 <div class="topbar">
-  <h1>Triage Agent Dashboard</h1>
+  <h1>MI Agent Dashboard</h1>
+  <div id="tabs" style="display:flex;gap:6px;margin-left:20px;">
+    <button id="tab-triage" onclick="switchTab('triage')" style="padding:6px 14px;border:none;border-radius:4px;font-size:13px;font-weight:600;cursor:pointer;">Triage</button>
+    <button id="tab-dev" onclick="switchTab('dev')" style="padding:6px 14px;border:none;border-radius:4px;font-size:13px;font-weight:600;cursor:pointer;">Dev Agent</button>
+  </div>
   <span class="score" id="topScore">Loading scoreboard...</span>
 </div>
 
@@ -159,18 +163,20 @@
   <!-- Left: ticket list -->
   <div class="sidebar">
     <div class="sidebar-header">
-      <span>AUT Bugs &amp; Incidents</span>
-      <button class="refresh-btn" onclick="loadTickets()">Refresh</button>
+      <span id="sidebarTitle">AUT Bugs &amp; Incidents</span>
+      <button class="refresh-btn" onclick="refresh()">Refresh</button>
     </div>
     <div class="filter-bar">
       <input type="text" id="searchBox" placeholder="Search key or title..." oninput="renderTicketList()">
-      <div class="date-row">
-        <label>From<input type="date" id="fromDate" onchange="loadTickets()"></label>
-        <label>To<input type="date" id="toDate" onchange="loadTickets()"></label>
+      <div id="triageFilters">
+        <div class="date-row">
+          <label>From<input type="date" id="fromDate" onchange="loadTickets()"></label>
+          <label>To<input type="date" id="toDate" onchange="loadTickets()"></label>
+        </div>
+        <label style="font-size:11px;color:#5e6c84;display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" id="includeResolved" onchange="loadTickets()" style="width:auto;"> Include resolved (Done) tickets
+        </label>
       </div>
-      <label style="font-size:11px;color:#5e6c84;display:flex;align-items:center;gap:6px;cursor:pointer;">
-        <input type="checkbox" id="includeResolved" onchange="loadTickets()" style="width:auto;"> Include resolved (Done) tickets
-      </label>
     </div>
     <div class="ticket-list" id="ticketList">
       <div style="padding:16px;color:#5e6c84;font-size:13px;">Loading tickets...</div>
@@ -191,16 +197,69 @@
 <script>
 let currentKey = null;
 let tickets = [];
+let currentTab = 'triage';   // 'triage' | 'dev'
+
+function styleTabs() {
+  for (const [id, tab] of [['tab-triage', 'triage'], ['tab-dev', 'dev']]) {
+    const b = document.getElementById(id);
+    const active = currentTab === tab;
+    b.style.background = active ? '#fff' : 'rgba(255,255,255,0.2)';
+    b.style.color = active ? '#0052cc' : '#fff';
+  }
+}
+
+function fixBtnLabel() {
+  return currentTab === 'dev' ? '⚙ Run dev agent' : '⚙ Suggest a fix (dry-run)';
+}
+
+function refresh() {
+  currentTab === 'dev' ? loadRcaTickets() : loadTickets();
+}
+
+function switchTab(tab) {
+  currentTab = tab;
+  currentKey = null;
+  styleTabs();
+  // Date/resolved filters only make sense for the Jira-synced Triage list.
+  document.getElementById('triageFilters').style.display = tab === 'triage' ? '' : 'none';
+  document.getElementById('sidebarTitle').textContent =
+    tab === 'triage' ? 'AUT Bugs & Incidents' : 'Tickets with an RCA';
+  document.getElementById('searchBox').value = '';
+  document.getElementById('detail').innerHTML =
+    `<div class="empty-state">Select a ticket ${tab === 'dev' ? 'to run the dev agent' : 'to review'}</div>`;
+  refresh();
+}
+
+async function loadRcaTickets() {
+  document.getElementById('ticketList').innerHTML =
+    '<div style="padding:16px;color:#5e6c84;font-size:13px;">Loading RCA tickets...</div>';
+  try {
+    const res = await fetch('/api/rca_tickets');
+    tickets = await res.json();
+    renderTicketList();
+    loadScoreboard();
+  } catch (e) {
+    document.getElementById('ticketList').innerHTML =
+      '<div style="padding:16px;color:#bf2600;font-size:13px;">Failed to load RCA tickets</div>';
+  }
+}
 
 async function loadTickets() {
   document.getElementById('ticketList').innerHTML =
     '<div style="padding:16px;color:#5e6c84;font-size:13px;">Refreshing...</div>';
   const from = document.getElementById('fromDate').value;
   const to = document.getElementById('toDate').value;
+  const incl = document.getElementById('includeResolved').checked;
+  // Remember the filters so a page refresh doesn't reset them.
+  try {
+    localStorage.setItem('triage.fromDate', from);
+    localStorage.setItem('triage.toDate', to);
+    localStorage.setItem('triage.includeResolved', incl ? 'true' : 'false');
+  } catch (e) {}
   const qs = new URLSearchParams();
   if (from) qs.set('from_date', from);
   if (to) qs.set('to_date', to);
-  if (document.getElementById('includeResolved').checked) qs.set('include_resolved', 'true');
+  if (incl) qs.set('include_resolved', 'true');
   try {
     const res = await fetch('/api/tickets?' + qs.toString());
     tickets = await res.json();
@@ -227,6 +286,7 @@ function renderTicketList() {
       <div class="key">${t.key}</div>
       <div class="summary">${escHtml(t.title || '')}</div>
       <span class="badge ${t.status}">${t.status.replace('_', ' ')}</span>
+      ${currentTab === 'dev' && t.bot_fix_json ? '<span style="margin-left:6px;font-size:10px;font-weight:700;color:#006644;">fix ready</span>' : ''}
     </div>
   `).join('');
 }
@@ -238,7 +298,12 @@ async function selectTicket(key) {
   if (!ticket) return;
 
   const alreadyDone = ticket.status === 'accepted' || ticket.status === 'rejected';
+  const isDev = currentTab === 'dev';
   const hasRca = ticket.bot_rca_json || ticket.status === 'rca_ready';
+  // Re-run is available in every state except while an investigation is in flight
+  // ('running') or before the first one ('pending' has its own big Run button):
+  // so rca_ready, accepted, rejected and failed can all be re-investigated.
+  const canRerun = ticket.status !== 'running' && ticket.status !== 'pending';
 
   document.getElementById('detail').innerHTML = `
     <div class="card">
@@ -253,17 +318,17 @@ async function selectTicket(key) {
 
     <div class="rca-card" id="rcaCard">
       <h3>
-        <span>Triage Agent RCA</span>
+        <span>${isDev ? 'Dev Agent' : 'Triage Agent RCA'}</span>
         <span style="display:flex;gap:8px;align-items:center;">
-          ${ticket.status === 'rca_ready' ? `<button onclick="rerunRca('${ticket.key}')" style="background:none;border:1px solid #dfe1e6;border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;color:#5e6c84;">↺ Re-run</button>` : ''}
+          ${!isDev && canRerun ? `<button onclick="rerunRca('${ticket.key}')" style="background:none;border:1px solid #dfe1e6;border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;color:#5e6c84;">↺ Re-run</button>` : ''}
         </span>
       </h3>
       <div id="rcaContent">
-        ${renderRcaContent(ticket)}
+        ${isDev ? renderFixSection(ticket) : renderRcaContent(ticket)}
       </div>
     </div>
 
-    ${!alreadyDone ? `
+    ${isDev ? '' : !alreadyDone ? `
     <div class="actions" id="actions">
       <button class="accept-btn" id="acceptBtn" onclick="acceptRca()" ${!hasRca ? 'disabled' : ''}>
         ✓ Accept
@@ -292,10 +357,12 @@ async function selectTicket(key) {
     </div>
     `}
 
+    ${isDev ? '' : `
     <div class="scoreboard">
       <h3>Accuracy Scoreboard</h3>
       <div id="scoreboardContent">Loading...</div>
     </div>
+    `}
   `;
 
   loadScoreboard();
@@ -383,6 +450,134 @@ const VERDICT_COLORS = {
   'Needs review': {bg: '#fffae6', fg: '#974f0c'},   // amber — a human must decide
 };
 
+// ---- Fix Suggester (Phase 1, dry-run — nothing is pushed) ----
+async function suggestFix(key) {
+  const btn = document.getElementById('fixBtn');
+  const out = document.getElementById('fixResult');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Generating fix…';
+  out.innerHTML = '';
+  try {
+    const r = await fetch(`/api/tickets/${key}/suggest_fix`, {method: 'POST'});
+    const d = await r.json();
+    out.innerHTML = r.ok ? renderFix(d, key)
+      : `<div style="color:#bf2600;font-size:13px;">${escHtml(d.detail || 'Fix generation failed')}</div>`;
+    // Cache on the in-memory ticket so re-selecting it this session keeps the fix;
+    // the server also persisted it, so a full refresh reloads it from the DB too.
+    if (r.ok) {
+      const idx = tickets.findIndex(t => t.key === key);
+      if (idx !== -1) tickets[idx].bot_fix_json = JSON.stringify(d);
+    }
+  } catch (e) {
+    out.innerHTML = `<div style="color:#bf2600;font-size:13px;">${escHtml(String(e))}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = fixBtnLabel();
+  }
+}
+
+function syntaxBadge(v) {
+  const b = v === true ? {t: 'syntax OK', bg: '#e3fcef', fg: '#006644'}
+    : v === false ? {t: 'syntax ERROR', bg: '#ffebe6', fg: '#bf2600'}
+    : {t: 'syntax not checked', bg: '#f4f5f7', fg: '#5e6c84'};
+  return `<span style="display:inline-block;padding:1px 8px;border-radius:3px;font-size:11px;font-weight:700;background:${b.bg};color:${b.fg};">${b.t}</span>`;
+}
+
+function renderFix(d, key) {
+  let h = '';
+  if (d.caveats && d.caveats.length) {
+    h += `<div style="background:#fffae6;border:1px solid #ffe380;padding:8px 10px;border-radius:4px;font-size:12px;margin-bottom:8px;">`
+       + d.caveats.map(c => '⚠ ' + escHtml(c)).join('<br>') + `</div>`;
+  }
+  if (!d.fixable) {
+    return h + `<div style="font-size:13px;color:#5e6c84;"><strong>No fix suggested.</strong> ${escHtml(d.reason || '')}</div>`;
+  }
+  const files = d.files || [];
+  h += `<p style="font-size:13px;margin-bottom:4px;"><strong>Proposed fix</strong> — ${files.length} file${files.length === 1 ? '' : 's'}</p>`;
+  if (d.rationale) h += `<p style="font-size:13px;color:#42526e;margin-bottom:8px;">${escHtml(d.rationale)}</p>`;
+  for (const f of files) {
+    const header = `${f.project ? `<span style="color:#5e6c84;">${escHtml(f.project)}</span> · ` : ''}<strong>${escHtml(f.file)}</strong> ${syntaxBadge(f.syntax_ok)}`;
+    const refused = (f.edits || []).filter(e => !e.applied)
+      .map(e => `<div style="font-size:12px;color:#bf2600;margin:4px 0;">✗ a snippet was not applied: ${escHtml(e.error)}</div>`).join('');
+    // Each file's diff is collapsible — collapsed by default when there's a diff to hide.
+    h += `<details style="margin:8px 0;">
+      <summary style="cursor:pointer;font-size:13px;">${header}</summary>
+      ${refused}
+      ${f.diff ? `<pre style="background:#f7f8fa;border:1px solid #e1e4e8;border-radius:4px;padding:10px;overflow-x:auto;font-size:12px;line-height:1.4;margin-top:6px;">${escHtml(f.diff)}</pre>` : ''}
+      <div style="font-size:11px;color:#8993a4;">${escHtml(f.syntax_note || '')}</div>
+    </details>`;
+  }
+  // Phase 1b — raise a DRAFT MR (only when something applied cleanly). If it's
+  // already been raised, show the link(s); otherwise offer Raise MR + Reject.
+  const anyApplied = files.some(f => (f.edits || []).some(e => e.applied));
+  if (d.mr && d.mr.results) {
+    h += `<div style="margin-top:10px;font-size:13px;">` + d.mr.results.map(r => r.mr_url
+      ? `✅ <a href="${escHtml(r.mr_url)}" target="_blank" style="color:#0052cc;">Draft MR opened — ${escHtml(r.project)}</a>`
+      : `⚠ ${escHtml(r.project)}: ${escHtml(r.error || 'not raised')}`).join('<br>') + `</div>`;
+  } else {
+    let btns = '';
+    if (anyApplied) {
+      btns += `<button id="mrBtn" onclick="raiseMr('${key}')" style="background:#0052cc;color:#fff;border:none;padding:6px 14px;border-radius:4px;font-size:13px;font-weight:600;cursor:pointer;">⬆ Raise draft MR</button>`;
+    }
+    btns += `<button onclick="rejectFix('${key}')" style="background:#fff;color:#bf2600;border:1px solid #bf2600;padding:6px 14px;border-radius:4px;font-size:13px;font-weight:600;cursor:pointer;">✗ Reject</button>`;
+    h += `<div style="margin-top:10px;display:flex;gap:10px;">${btns}</div>`;
+  }
+  h += `<div style="font-size:11px;color:#8993a4;margin-top:6px;">review the diff, then raise the MR — nothing is pushed until you do</div>`;
+  return h;
+}
+
+function renderFixSection(ticket) {
+  return `<div style="margin-top:14px;">
+    <button id="fixBtn" onclick="suggestFix('${ticket.key}')"
+      style="background:#fff;border:1px solid #dfe1e6;color:#172b4d;padding:6px 14px;
+      border-radius:4px;font-size:13px;font-weight:600;cursor:pointer;">${fixBtnLabel()}</button>
+    <div id="fixResult" style="margin-top:10px;">${ticket.bot_fix_json ? renderFix(JSON.parse(ticket.bot_fix_json), ticket.key) : ''}</div>
+  </div>`;
+}
+
+async function rejectFix(key) {
+  try {
+    const r = await fetch(`/api/tickets/${key}/reject_fix`, {method: 'POST'});
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      showToast(d.detail || 'Reject failed', true);
+      return;
+    }
+    const idx = tickets.findIndex(t => t.key === key);
+    if (idx !== -1) tickets[idx].bot_fix_json = null;
+    // Back to just the "Run dev agent" button (the suggestion is gone).
+    const out = document.getElementById('fixResult');
+    if (out) out.innerHTML = '';
+    showToast('Fix suggestion discarded');
+  } catch (e) {
+    showToast(String(e), true);
+  }
+}
+
+async function raiseMr(key) {
+  const btn = document.getElementById('mrBtn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Raising draft MR…'; }
+  try {
+    const r = await fetch(`/api/tickets/${key}/raise_mr`, {method: 'POST'});
+    const d = await r.json();
+    if (!r.ok) {
+      showToast(d.detail || 'Raise MR failed', true);
+      if (btn) { btn.disabled = false; btn.textContent = '⬆ Raise draft MR'; }
+      return;
+    }
+    const idx = tickets.findIndex(t => t.key === key);
+    if (idx !== -1 && tickets[idx].bot_fix_json) {
+      const fix = JSON.parse(tickets[idx].bot_fix_json); fix.mr = d;
+      tickets[idx].bot_fix_json = JSON.stringify(fix);
+      document.getElementById('fixResult').innerHTML = renderFix(fix, key);
+    }
+    showToast('Draft MR raised');
+  } catch (e) {
+    showToast(String(e), true);
+    if (btn) { btn.disabled = false; btn.textContent = '⬆ Raise draft MR'; }
+  }
+}
+
 function renderRcaContent(ticket) {
   if (ticket.bot_rca_json) {
     const v = JSON.parse(ticket.bot_rca_json);
@@ -415,6 +610,8 @@ function renderRcaContent(ticket) {
       });
       html += '</div></details>';
     }
+    // Fix Suggester lives in its own section (also used standalone on the Dev Agent tab).
+    html += `<div style="border-top:1px solid #eee;padding-top:12px;">${renderFixSection(ticket)}</div>`;
     return html;
   }
   if (ticket.status === 'pending') {
@@ -436,7 +633,7 @@ function renderRcaContent(ticket) {
       <button class="run-btn" onclick="runRca('${ticket.key}')" style="margin-top:10px;">Retry</button>`;
   }
   if (ticket.status === 'running') {
-    return '<p style="color:#5e6c84;font-size:14px;font-style:italic;">⏳ Agent is investigating the codebase... this takes 1-3 minutes.</p>';
+    return '<p style="color:#5e6c84;font-size:14px;font-style:italic;">⏳ Agent is investigating the codebase... this usually takes about 5–8 minutes (up to 10).</p>';
   }
   return '<p class="rca-placeholder">Running...</p>';
 }
@@ -448,7 +645,7 @@ async function runRca(key) {
     btn.innerHTML = '<span class="spinner"></span> Investigating...';
   }
   document.getElementById('rcaContent').innerHTML =
-    '<p style="color:#5e6c84;font-size:14px;font-style:italic;">⏳ Agent is investigating the codebase... this takes 1-3 minutes.</p>';
+    '<p style="color:#5e6c84;font-size:14px;font-style:italic;">⏳ Agent is investigating the codebase... this usually takes about 5–8 minutes (up to 10).</p>';
   try {
     const res = await fetch(`/api/tickets/${key}/rca`, {method:'POST'});
     if (!res.ok) throw new Error(await res.text());
@@ -486,8 +683,18 @@ async function pollRca(key) {
 }
 
 async function rerunRca(key) {
-  await fetch(`/api/tickets/${key}/reset`, {method:'POST'});
   const idx = tickets.findIndex(t => t.key === key);
+  const st = idx !== -1 ? tickets[idx].status : '';
+  // Re-running a ticket a human already decided on reopens it for review and
+  // replaces the bot RCA. It does NOT undo anything already posted to Jira, so
+  // make the reopen deliberate.
+  if ((st === 'accepted' || st === 'rejected') &&
+      !confirm('This ticket already has a human decision. Re-running generates a new RCA '
+             + 'and reopens it for review — it does not change what was already posted to '
+             + 'Jira. Continue?')) {
+    return;
+  }
+  await fetch(`/api/tickets/${key}/reset`, {method:'POST'});
   if (idx !== -1) { tickets[idx].status = 'pending'; tickets[idx].bot_rca_json = null; }
   selectTicket(key);
   renderTicketList();
@@ -597,17 +804,25 @@ function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-// Default the date range to the last 7 days so the first load is scoped, not
-// "every AUT bug ever". User can widen/narrow via the From/To pickers.
+// Restore the saved filters across refreshes; on a first visit, default the date
+// range to the last 7 days so the first load is scoped, not "every AUT bug ever".
 (function initDateRange() {
   const fmt = d => d.toISOString().slice(0, 10);
   const today = new Date();
   const weekAgo = new Date();
   weekAgo.setDate(today.getDate() - 7);
-  document.getElementById('fromDate').value = fmt(weekAgo);
-  document.getElementById('toDate').value = fmt(today);
+  let savedFrom, savedTo, savedIncl;
+  try {
+    savedFrom = localStorage.getItem('triage.fromDate');
+    savedTo = localStorage.getItem('triage.toDate');
+    savedIncl = localStorage.getItem('triage.includeResolved');
+  } catch (e) {}
+  document.getElementById('fromDate').value = savedFrom || fmt(weekAgo);
+  document.getElementById('toDate').value = savedTo || fmt(today);
+  document.getElementById('includeResolved').checked = savedIncl === 'true';
 })();
 
+styleTabs();
 loadTickets();
 </script>
 </body>
