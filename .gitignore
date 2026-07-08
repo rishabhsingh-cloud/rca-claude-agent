@@ -1,6 +1,9 @@
 # graphify build output (the persistent run is checked in under fixtures/graphs/)
 graphify-out/
 
+# macOS
+.DS_Store
+
 # Python
 __pycache__/
 *.pyc

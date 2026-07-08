@@ -1,165 +1,214 @@
-# RCA Agent — trace-first slice
+# Triage Agent — accuracy-first RCA for QA
 
-Accuracy-first root-cause analysis over Jira tickets + self-hosted GitLab.
-This repo implements the **highest-accuracy slice** of the design
-([rca-agent-design.md](../../Downloads/rca-agent-design.md)): the deterministic
-**trace → blame → introducing-MR → regression verdict** path, runnable today
-against recorded fixtures with no credentials.
+An **accuracy-first root-cause-analysis agent** that reads a Jira bug/incident, investigates
+the real system through **read-only tools** (self-hosted GitLab, New Relic, and the app
+databases), and returns a **calibrated, QA-facing verdict** — what broke, why, whose fault it
+is, and what to do next. A separate **Fix Suggester** agent can then propose a code fix for a
+human to review.
 
-```
-Jira ticket
-  -> parse_stack_trace        (deterministic; ground truth if a trace exists)
-  -> route_repo               (local summaries; hypothesis only)
-  -> fetch_file_lines         (GitLab; VERIFICATION PASS — confirm the line)
-  -> git_blame                (GitLab; which commit last changed the line)
-  -> merge_requests_for_commit(GitLab; the introducing MR -> regression?)
-  -> structured verdict for QA
-```
+Guiding principle: **a confidently wrong RCA is worse than none.** When the evidence is thin,
+the agent says so and hands off to a human rather than inventing a cause.
 
-## Quick start (mock backend, no API key)
+Runs live for the QA team as a **human-in-the-loop review dashboard**; the model orchestrates,
+but every conclusion must be backed by a real artifact it fetched, and nothing is written to
+Jira or GitLab without a person approving it.
 
-```bash
-python -m rca_agent.run --ticket RCA-101          # human-readable verdict
-python -m rca_agent.run --ticket RCA-101 --json   # structured JSON
-python -m rca_agent.index acme/billing-service \
-    --sha <sha> --date 2026-06-20                  # (re)build graph map + summary
-python -m pytest -q                                # tests (pip install pytest)
-```
+---
 
-Expected: a **HIGH-confidence regression** verdict for `RCA-101`, with a full
-evidence chain ending at MR !42 in `acme/billing-service`. A ticket without a
-trace degrades honestly to **LOW confidence + candidates** ("needs a human")
-rather than inventing a cause.
+## Two agents, cleanly separated
 
-## Two execution paths, one source of truth
+| Agent | Role | Access |
+|---|---|---|
+| **RCA agent** (`agent.py`) | Investigates a ticket → structured verdict | **Strictly read-only** (24 tools) |
+| **Fix Suggester** (`fix_agent.py`) | Consumes a verdict → proposes a code fix | **Read-only** (its own separate tool server); **dry-run** — writes nothing |
 
-| Path | Command | When | Needs |
-|---|---|---|---|
-| **Deterministic pipeline** | (default) | Clean trace-first tickets; the eval baseline | nothing |
-| **Agent loop** | `--agent` | Fuzzier / no-trace tickets where judgement helps | `claude-agent-sdk` + `ANTHROPIC_API_KEY` |
+They share **no tool server** and **no credentials**: the RCA uses the `mcp__rca__*` server; the
+Fix Suggester has its own minimal `mcp__fix__*` server ([`fix_tools.py`](rca_agent/fix_tools.py)).
+This keeps the read-only RCA isolated and lets each evolve without affecting the other.
 
-Both use the **same** read-only tools ([`tools.py`](rca_agent/tools.py)) and the
-**same** verdict schema ([`schema.py`](rca_agent/schema.py)), so they're
-directly comparable on the eval set.
+---
+
+## How the RCA agent works
+
+Retrieval order, most deterministic first (calibrate confidence *down* as it gets fuzzier):
+
+1. **Production evidence first (New Relic).** For any crash / timeout / "not working", pull the
+   real production error and logs — ground truth, treated like a stack trace.
+2. **Stack trace → blame → introducing MR.** If there's a trace, that's ground truth: fetch the
+   exact line at a **pinned commit SHA**, `git_blame` it, find the MR that introduced it → *is it
+   a regression, and what changed?*
+3. **No trace → localize in layers:** cross-service architecture map → per-repo summary →
+   code/symbol search + the call graph.
+4. **Exact-error lookup.** Many failures show a generic message ("Due to Wrong Input Data…")
+   while the *real* reason is stored in the app's databases. One tool
+   (`find_error_reason`) checks the known error stores and returns the actual reason.
+5. **Confirm data hypotheses** against the real (PII-masked) databases before blaming code.
+
+**Hard rules baked into the system prompt** ([`prompts.py`](rca_agent/prompts.py)): don't repeat
+guesses from ticket comments; no conclusion without an evidence chain of real fetched artifacts;
+**check the timing** (an old, unchanged line can't cause a brand-new symptom); cover *every*
+symptom; pin the ref so line numbers can't drift; and **never put customer PII in the verdict**.
+A final self-check gate runs before it answers.
+
+### The verdict
+
+Structured, not an essay ([`schema.py`](rca_agent/schema.py)). Every RCA carries:
+
+- a **VERDICT** — the one-line QA call, derived automatically from the cause + confidence:
+  **`BUG Accepted`** (our code/data/infra) · **`Not a BUG`** (customer's own action or a
+  government/vendor system) · **`Needs review`** (evidence too thin to commit).
+- **cause categories** (a list): `code · data · infrastructure · third_party · user_side · ux · unknown`
+- a plain-language summary for non-developers, an **evidence chain** of clickable GitLab links,
+  regression yes/no + introducing MR, a suggested next action, blast radius, and a
+  **calibrated confidence** (high / medium / low).
+
+After the agent answers, [`verify.py`](rca_agent/verify.py) independently re-checks its concrete
+claims (files, commits, MRs actually exist via the GitLab API) and **downgrades confidence** if
+they don't.
+
+---
+
+## Tools (all read-only, PII-masked)
+
+The RCA agent's `mcp__rca__*` server exposes 24 tools:
+
+- **Orient:** `parse_stack_trace`, `route_repo`, `get_repo_summary`, `search_architecture`
+- **GitLab ground truth:** `fetch_file_lines`, `git_blame`, `get_commit`, `merge_requests_for_commit`
+- **Code graph:** `find_callers`, `find_dependents`, `get_subgraph`, `graph_has_edge`, `search_symbols`
+- **Code search:** `search_code` (GitLab API), `search_code_local` (ripgrep on clones)
+- **New Relic:** `search_nr_errors`, `search_nr_logs`, `query_nr`, `find_request_ids`, `trace_request`
+- **App data:** `query_users_db` (Postgres), `query_app_data` (MongoDB), **`find_error_reason`**
+- **Web:** `web_search`
+
+`find_error_reason` is the "get the real reason" tool. Many failures show the user a generic
+message while the *actual* error is written to a domain-specific **MongoDB** collection — **not**
+to New Relic or Postgres. We identified where each class of error lives and wired them into one
+lookup: given an identifier from the ticket (GSTIN / return period / import-job id), it checks all
+of them in one call and returns the specific failure reason:
+
+| Store (MongoDB) | Holds |
+|---|---|
+| `gstr1_exceptions` | GSTR-1 sales-import row errors (e.g. `exception: "inv_typ incorrect"`) |
+| `data_retrieval_api_logs` | GST-portal / NIC fetch errors, with `error_case: "gov"` = the government side failed (→ *not our bug*) |
+| `reco_invoice_error_logs` | reconciliation / force-match errors |
+| `import_logs` | the specific rejected import rows (by import-job id) |
+
+Queries are indexed + time-capped so even the 100M+ row collections stay fast, and results are
+PII-masked.
+
+---
+
+## The Fix Suggester (Phase 1 — dry-run)
+
+A **separate** agent that turns a verdict into a proposed code fix, for a human to review in the
+dashboard. **It writes nothing** — no branch, no MR, no commit.
+
+Flow ([`fix_agent.py`](rca_agent/fix_agent.py)):
+
+1. A human clicks **"Suggest a fix"** on a ticket that has an RCA (always human-initiated).
+2. The agent explores the one service the RCA localized to, using its **own read-only tools**
+   (`search_code` via the GitLab API, `fetch_file_lines`, the code graph) — pinned to a single
+   commit — to find *all* the code the fix needs, even across several files.
+3. It proposes minimal `before → after` snippets. These are applied **in memory by exact string
+   match** (it refuses if the code drifted or the snippet isn't unique — no fuzzy patching), then
+   each patched file is **syntax-checked**.
+4. The dashboard shows a **diff per file + rationale + caveats**. A human reviews it.
+
+Runs on a **faster model than the RCA** (Sonnet, via `RCA_FIX_MODEL`) since exploration + a
+minimal patch don't need the RCA's model; the RCA stays on Opus.
+
+**Phase 1b (next):** turn the reviewed suggestion into a **draft merge request** — which needs a
+dedicated GitLab bot account with a write-scoped, **Developer-only** token (so it can open an MR
+but structurally *cannot* merge protected `main` — a human always merges).
+
+---
+
+## Safety & governance
+
+- **RCA is strictly read-only.** No tool writes anywhere.
+- **PII never enters the prompt or the output.** DB/log tools mask by column name *and* value
+  pattern (GSTIN / PAN / email / phone / …); the prompt forbids copying identifiers from the
+  ticket into the verdict. GSTINs may be used as *query filters* but never echoed.
+- **Human-in-the-loop.** The team reviews every RCA and clicks Accept / Reject / Accept-and-post;
+  posting to Jira only happens on approval (add-only — the app never edits or deletes a comment).
+- **Bounded & safe queries.** Read replicas, SELECT-only + server read-only guard on Postgres,
+  find-only on Mongo, per-query time caps, row/step budgets.
+- **The fix agent is dry-run and separate** from the RCA, by design.
+
+---
+
+## Deployment
+
+- **Live on an internal EC2 host** (VPN-only) as a user `systemd` service, `rca-webapp`
+  (FastAPI + uvicorn) — the human review dashboard.
+- **CI/CD:** push to `main` → a self-hosted GitHub Actions runner on EC2 → `git pull` +
+  `pip install` + restart the service.
+- A nightly **re-index timer** rebuilds the code graphs + repo summaries.
+- The autonomous auto-posting daemon is **retired** in favor of human-in-the-loop review.
+
+**Live integrations:** self-hosted GitLab (read scope), Jira Cloud (REST), New Relic (NerdGraph),
+Postgres (read replica), MongoDB (read-only).
+
+---
 
 ## Backends
 
-Selected by `RCA_BACKEND` (see [.env.example](.env.example)):
+Selected by `RCA_BACKEND`:
+- **`mock`** (default) — on-disk fixtures under `fixtures/`; no network, no credentials. The test suite runs here.
+- **`live`** — the real GitLab / Jira / New Relic / DB integrations.
 
-- **`mock`** (default) — reads on-disk fixtures under `fixtures/`. No network, no PAT.
-- **`live`** — `RestGitLabClient` hits a self-hosted GitLab REST API (read-only:
-  files/raw, blame, commits, commit→MRs, **tree enumeration**) with a
-  `read_api`/`read_repository` PAT. Same interface, so all tool/pipeline/indexer
-  code is unchanged.
+---
 
-**Jira** is fetched via the **Atlassian remote MCP server** (`jira.py`): the agent
-loop attaches it and calls `getJiraIssue` / JQL itself (read-only; OAuth, no PAT).
-A raw Atlassian issue is turned into ticket text by `normalize_jira_issue`, which
-flattens ADF (Atlassian Document Format) so a **stack trace inside an ADF code
-block survives into the trace parser** — see the `RCA-201` fixture.
-
-## Going live
-
-1. **GitLab**: set `RCA_BACKEND=live`, `GITLAB_URL`, `GITLAB_TOKEN` (read scope).
-2. **Index the real repos** (the indexer now enumerates + fetches the live file
-   tree through the GitLab client): `python -m rca_agent.index <project> --ref main`
-   — publishes the graph map + summary the RCA agent reads.
-3. **Jira**: run the `--agent` path; the Atlassian MCP server handles the OAuth
-   flow and the agent fetches tickets by key. (The deterministic path takes
-   ticket text; for live Jira there, normalize a `getJiraIssue` payload with
-   `normalize_jira_issue`.)
-
-Everything above is wired and unit-tested against mocks; flipping to live is
-credentials + the index step, not new code.
-
-## Layout
+## Repository layout
 
 ```
 rca_agent/
-  stack_trace.py     trace parsing (Python/Java/JS + generic), normalized crash-last
-  routing.py         route_repo over local repo summaries (path tokens weighted 3x)
-  gitlab_client.py   GitLabClient protocol + MockGitLabClient + RestGitLabClient (read-only)
-  graph.py           symbol-level directed call graph (AST) + queries (callers/callees/subgraph)
-  graph_store.py     build/load/cache per repo: AST map -> graphify export -> build-from-source
-  graphify_adapter.py normalize a graphify graph.json into the same RepoGraph
-  summarize.py       deterministic repo-summary generator (auto block + preserved human block)
-  index.py           the indexer's core: writes graph map + summary (RCA agent stays read-only)
-  investigation.py   the deterministic trace-first pipeline -> Verdict (incl. blast radius)
-  tools.py           the same primitives as Agent SDK @tool MCP server (mcp__rca__*)
-  prompts.py         accuracy-guardrail system prompt + structured-output contract
-  agent.py           Agent SDK driver (query loop) + verdict parsing
-  schema.py          Verdict / EvidenceLink / Triage / Confidence + JSON schema
-  run.py             CLI
-fixtures/
-  tickets/           Jira-shaped ticket JSON
-  gitlab/<proj>/     files/ (real source) + meta.json (blame/commits/MRs)
-  repo_summaries/    per-repo .md (auto + human blocks) — generated by index.py
-  graphs/            published graph maps (<proj>.json); optional <proj>.graphify.json
-tests/               deterministic-core tests (trace-first + graph)
+  agent.py          RCA agent (Agent SDK loop) + verdict parsing
+  prompts.py        the accuracy-guardrail system prompt
+  schema.py         Verdict / VERDICT label / cause buckets / render + Jira ADF
+  tools.py          the read-only RCA tool server (mcp__rca__*)
+  verify.py         post-hoc verification of the verdict's claims (via GitLab API)
+  fix_agent.py      Fix Suggester (explorer, dry-run) — SEPARATE agent
+  fix_tools.py      the Fix Suggester's own read-only tool server (mcp__fix__*)
+  error_lookup.py   find_error_reason — one lookup across the domain error stores
+  newrelic.py       New Relic (errors, logs, request tracing)
+  app_db.py         Postgres access + shared PII masking
+  app_mongo.py      MongoDB access (find-only, masked, time-capped)
+  gitlab_client.py  GitLab client (mock + live REST), read-only
+  graph.py / graph_store.py / graphify_adapter.py   symbol-level call graph
+  architecture.py / routing.py / summarize.py / index.py   localization + indexing
+  webapp/           FastAPI review dashboard (app.py + static/index.html)
+tests/              deterministic tests against fixtures
 ```
 
-## The code graph (Step 3)
+## Running locally
 
-From a suspect symbol the agent can trace **callers** (where bad input came from
-+ the blast radius to retest), **callees** (dependencies), and **import
-dependents**. The deterministic pipeline already attaches the blast radius to the
-verdict (e.g. `compute_total` -> retest `create_invoice_endpoint`).
+```bash
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev,live,webapp,appdb]"
+RCA_BACKEND=mock RCA_INDEX_DIR="$PWD/fixtures" .venv/bin/python -m pytest tests/   # tests
+.venv/bin/uvicorn rca_agent.webapp.app:app --host 127.0.0.1 --port 8000            # dashboard
+```
+The live path needs the company VPN, `ANTHROPIC_API_KEY`, and the integration credentials in `.env`.
 
-- **Engine**: a directed symbol-level call graph built from Python source with
-  the stdlib `ast` (`graph.py`) — precise, dependency-free, edge-direction
-  preserving, with provenance (`extracted`/`ambiguous`/`inferred`) on each edge.
-- **graphify bridge**: `graphify_adapter.py` loads a graphify `graph.json` into
-  the same model for multi-language / larger repos (build graphify with
-  `--directed` for true caller→callee direction; undirected graphs record both
-  ways and mark edges `inferred`). Validated against a **real `graphify --directed`
-  run** on the billing repo (saved at `fixtures/graphs/<proj>.graphify.json`); the
-  store prefers the AST map, falls back to a graphify export when present.
-  *Engine difference observed:* graphify is conservative about attribute calls —
-  it didn't resolve `invoice.compute_total()` to the method, so it found no caller
-  for `compute_total`, whereas the AST engine resolves it by name and recovers
-  `create_invoice_endpoint`. The AST engine gives a fuller blast radius on Python;
-  graphify trades that for fewer false edges and multi-language coverage.
-- **Guardrail**: `mcp__rca__graph_has_edge` lets the agent check "does A call B?"
-  before asserting it — the design's "flag A→B if the graph has no edge" rule.
-- Summaries and the graph come from **one AST pass** (`index.py`), so they can't
-  drift apart; both are SHA-stamped for staleness checks.
+---
 
-## How this maps to the design's build order
+## Recent additions
 
-- **Step 1** (read-only GitLab + ticket fetch): GitLab client + ticket loader — done (mock; live impl present).
-- **Step 2** (trace → blame → MR; regression detection): **this slice** — done & tested.
-- **Step 3** (`route_repo` + graph tools): **done** — `route_repo`, the
-  symbol-level call graph (`find_callers`/`find_dependents`/`get_subgraph` +
-  `graph_has_edge`), the summary generator/indexer, and blast-radius in the verdict.
-- **Step 4** (evidence-chain + verification + structured output): enforced in the
-  pipeline and in the system prompt; verdict is structured.
-- **Steps 5–6** (eval set, indexer agent): not yet — the deterministic pipeline is
-  the eval baseline to build on.
+- **VERDICT label** (`BUG Accepted` / `Not a BUG` / `Needs review`) shown on the dashboard and the
+  Jira comment, with a fixed "Automated RCA — verify before acting" banner.
+- **`find_error_reason`** — surfaces the real error behind a generic message from the app's error
+  stores (verified: e.g. returns "inv_typ incorrect" instead of "contact support").
+- **Verification via the GitLab API**, so RCAs aren't unfairly downgraded on setups without local
+  repo clones.
+- **The Fix Suggester** (Phase 1, dry-run) with its own separate tool server.
 
-## Known limitations / next steps
+## Known limitations / roadmap
 
-- **No temperature control.** The Claude Agent SDK does not expose sampling
-  parameters, so the design's "low temperature" lever isn't available. Accuracy
-  is instead enforced via deterministic tools + the evidence-chain system prompt
-  + required structured output. (`effort` is available if stricter reasoning
-  control is wanted.)
-- **Deploy-path normalization.** Traces with absolute paths (`/srv/app/...`) are
-  preserved verbatim; mapping them to repo-relative paths is a refinement.
-- **`route_repo` is keyword-based.** Fine for trace-first (the path is a strong
-  signal); the no-trace path will want real GitLab search / graph tracing.
-- **AST graph is Python-only** and resolves calls by name (intra-repo, best-effort
-  — overloads land as `ambiguous` edges). Other languages go through the graphify
-  adapter. Cross-service edges (HTTP/queue) aren't modeled — that's open question
-  #3 in the design (microservices).
-- **Call graph ≠ data flow.** Blast radius (callers) is exact; it won't by itself
-  pinpoint a bad *value* (e.g. the `tax_rate` assignment) — blame + reading the
-  fetched code does that.
-- **Live backends are code-complete but unrun against real servers.** The GitLab
-  REST client (incl. tree enumeration for live indexing) and the Atlassian MCP
-  wiring are implemented and tested against mocks/recorded payloads; neither has
-  hit a real instance yet. Going live = credentials + `python -m rca_agent.index`.
-- **Agent path needs the SDK + `ANTHROPIC_API_KEY`** (and Atlassian OAuth for the
-  Jira MCP); the deterministic path is fully exercised by the tests.
-- **Jira ADF normalization** is validated on a recorded issue shape; the exact
-  payload the hosted Atlassian MCP returns may differ — `normalize_jira_issue`
-  tolerates both ADF and pre-rendered strings, but confirm on first live fetch.
+- The Fix Suggester is **dry-run** and best on **localized** fixes; large cross-file redesigns are
+  a starting point at best, and it only sees code it can search within one service. Phase 1b adds
+  the reviewed → draft-MR path (needs the write-scoped bot token).
+- Real sandbox *verification* that a fix works is out of scope (these services are hard to
+  sandbox); "syntax OK" means it parses, not that it's correct.
+- Not every failure is recorded where the agent can read it — some truly-unhandled errors are only
+  in server log files, and need an app-side change to surface.
+```
