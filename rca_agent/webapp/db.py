@@ -151,3 +151,34 @@ def get_scoreboard() -> dict:
     rate = round(accepted / total * 10, 1) if total else 0
     return {"total": total, "accepted": accepted, "rejected": rejected,
             "rate": rate, "goal": 9.0}
+
+
+def get_quality_stats() -> dict:
+    """RCA-quality analytics for the Quality tab, from data we already store:
+    accept/reject outcomes + the agent's own VERDICT and cause-bucket distribution
+    across every ticket that has an RCA."""
+    with _conn() as con:
+        rows = con.execute("SELECT status, bot_rca_json FROM reviews").fetchall()
+    total = len(rows)
+    accepted = rejected = with_rca = 0
+    by_verdict: dict[str, int] = {}
+    by_cause: dict[str, int] = {}
+    for r in rows:
+        if r["status"] == "accepted":
+            accepted += 1
+        elif r["status"] == "rejected":
+            rejected += 1
+        if r["bot_rca_json"]:
+            with_rca += 1
+            try:
+                d = json.loads(r["bot_rca_json"])
+            except (ValueError, TypeError):
+                continue
+            vl = d.get("verdict_label")
+            if vl:
+                by_verdict[vl] = by_verdict.get(vl, 0) + 1
+            for c in (d.get("cause_categories") or []):
+                by_cause[c] = by_cause.get(c, 0) + 1
+    return {"total": total, "with_rca": with_rca, "reviewed": accepted + rejected,
+            "accepted": accepted, "rejected": rejected,
+            "by_verdict": by_verdict, "by_cause": by_cause}

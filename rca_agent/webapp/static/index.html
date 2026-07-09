@@ -155,13 +155,13 @@
   <div id="tabs" style="display:flex;gap:6px;margin-left:20px;">
     <button id="tab-triage" onclick="switchTab('triage')" style="padding:6px 14px;border:none;border-radius:4px;font-size:13px;font-weight:600;cursor:pointer;">Triage</button>
     <button id="tab-dev" onclick="switchTab('dev')" style="padding:6px 14px;border:none;border-radius:4px;font-size:13px;font-weight:600;cursor:pointer;">Dev Agent</button>
+    <button id="tab-quality" onclick="switchTab('quality')" style="padding:6px 14px;border:none;border-radius:4px;font-size:13px;font-weight:600;cursor:pointer;">Quality</button>
   </div>
-  <span class="score" id="topScore">Loading scoreboard...</span>
 </div>
 
 <div class="layout">
   <!-- Left: ticket list -->
-  <div class="sidebar">
+  <div class="sidebar" id="sidebar">
     <div class="sidebar-header">
       <span id="sidebarTitle">AUT Bugs &amp; Incidents</span>
       <button class="refresh-btn" onclick="refresh()">Refresh</button>
@@ -200,7 +200,7 @@ let tickets = [];
 let currentTab = 'triage';   // 'triage' | 'dev'
 
 function styleTabs() {
-  for (const [id, tab] of [['tab-triage', 'triage'], ['tab-dev', 'dev']]) {
+  for (const [id, tab] of [['tab-triage', 'triage'], ['tab-dev', 'dev'], ['tab-quality', 'quality']]) {
     const b = document.getElementById(id);
     const active = currentTab === tab;
     b.style.background = active ? '#fff' : 'rgba(255,255,255,0.2)';
@@ -220,6 +220,13 @@ function switchTab(tab) {
   currentTab = tab;
   currentKey = null;
   styleTabs();
+  const isQuality = tab === 'quality';
+  // Quality is a full-width dashboard — no ticket sidebar.
+  document.getElementById('sidebar').style.display = isQuality ? 'none' : '';
+  if (isQuality) {
+    loadQuality();
+    return;
+  }
   // Date/resolved filters only make sense for the Jira-synced Triage list.
   document.getElementById('triageFilters').style.display = tab === 'triage' ? '' : 'none';
   document.getElementById('sidebarTitle').textContent =
@@ -228,6 +235,61 @@ function switchTab(tab) {
   document.getElementById('detail').innerHTML =
     `<div class="empty-state">Select a ticket ${tab === 'dev' ? 'to run the dev agent' : 'to review'}</div>`;
   refresh();
+}
+
+function qbar(pct, color) {
+  const w = Math.max(0, Math.min(100, Math.round(pct)));
+  return `<div style="height:8px;border-radius:4px;background:#f4f5f7;overflow:hidden;margin-top:4px;"><div style="height:100%;width:${w}%;background:${color};"></div></div>`;
+}
+
+async function loadQuality() {
+  const el = document.getElementById('detail');
+  el.innerHTML = '<div class="empty-state">Loading quality…</div>';
+  try {
+    const s = await (await fetch('/api/quality')).json();
+    el.innerHTML = renderQuality(s);
+  } catch (e) {
+    el.innerHTML = '<div style="color:#bf2600;padding:16px;font-size:13px;">Failed to load quality</div>';
+  }
+}
+
+function renderQuality(s) {
+  const reviewed = s.reviewed || 0;
+  const accPct = reviewed ? Math.round(s.accepted / reviewed * 100) : 0;
+  const rejPct = reviewed ? Math.round(s.rejected / reviewed * 100) : 0;
+  let h = `<div class="card"><h3>RCA quality</h3>
+    <div style="font-size:13px;color:#5e6c84;margin-bottom:14px;">${s.with_rca} tickets have an RCA · ${reviewed} reviewed by a human</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;">
+      <div style="background:#e3fcef;border-radius:12px;padding:14px;">
+        <div style="color:#006644;font-size:13px;font-weight:600;">✓ Accepted</div>
+        <div style="font-size:28px;font-weight:700;color:#006644;margin:4px 0;">${s.accepted}</div>
+        ${qbar(accPct, '#006644')}<div style="font-size:12px;color:#006644;margin-top:4px;">${accPct}% of reviewed</div></div>
+      <div style="background:#ffebe6;border-radius:12px;padding:14px;">
+        <div style="color:#bf2600;font-size:13px;font-weight:600;">✗ Rejected</div>
+        <div style="font-size:28px;font-weight:700;color:#bf2600;margin:4px 0;">${s.rejected}</div>
+        ${qbar(rejPct, '#bf2600')}<div style="font-size:12px;color:#bf2600;margin-top:4px;">${rejPct}% of reviewed</div></div>
+    </div></div>`;
+
+  const vColor = {'BUG Accepted': '#bf2600', 'Not a BUG': '#006644', 'Needs review': '#974f0c'};
+  const vTotal = Object.values(s.by_verdict || {}).reduce((a, b) => a + b, 0) || 1;
+  let vh = '';
+  ['BUG Accepted', 'Not a BUG', 'Needs review'].forEach(k => {
+    const n = (s.by_verdict || {})[k] || 0;
+    const pct = Math.round(n / vTotal * 100);
+    vh += `<div style="margin-bottom:10px;"><div style="display:flex;justify-content:space-between;font-size:13px;color:#172b4d;"><span>${k}</span><span style="color:#5e6c84;">${n} · ${pct}%</span></div>${qbar(pct, vColor[k])}</div>`;
+  });
+  h += `<div class="card"><h3>By verdict</h3>${vh}</div>`;
+
+  const causes = s.by_cause || {};
+  const maxC = Math.max(1, ...Object.values(causes));
+  const keys = Object.keys(causes).sort((a, b) => causes[b] - causes[a]);
+  let ch = keys.length ? '' : '<div style="font-size:13px;color:#5e6c84;">No RCAs yet.</div>';
+  keys.forEach(c => {
+    const n = causes[c], b = CAUSE_BUCKETS[c] || CAUSE_BUCKETS.unknown;
+    ch += `<div style="margin-bottom:10px;"><div style="display:flex;justify-content:space-between;font-size:13px;color:#172b4d;"><span>${b.label}</span><span style="color:#5e6c84;">${n}</span></div>${qbar(n / maxC * 100, b.fg)}</div>`;
+  });
+  h += `<div class="card"><h3>By cause bucket</h3>${ch}</div>`;
+  return h;
 }
 
 async function loadRcaTickets() {
@@ -354,13 +416,6 @@ async function selectTicket(key) {
     <div class="card" style="border-color:${ticket.status==='accepted'?'#36b37e':'#ff5630'}">
       <h3>${ticket.status === 'accepted' ? '✓ Accepted' : '✗ Rejected — Human RCA posted'}</h3>
       ${ticket.human_rca ? `<div class="value">${escHtml(ticket.human_rca)}</div>` : ''}
-    </div>
-    `}
-
-    ${isDev ? '' : `
-    <div class="scoreboard">
-      <h3>Accuracy Scoreboard</h3>
-      <div id="scoreboardContent">Loading...</div>
     </div>
     `}
   `;
@@ -762,27 +817,7 @@ async function postHumanRca() {
 }
 
 async function loadScoreboard() {
-  try {
-    const res = await fetch('/api/scoreboard');
-    const s = await res.json();
-    const pct = s.total ? Math.round(s.accepted / s.total * 100) : 0;
-    const rateStr = s.total ? `${s.rate}/10` : '—';
-    document.getElementById('topScore').textContent =
-      `Acceptance rate: ${rateStr} (goal: 9/10)`;
-    const el = document.getElementById('scoreboardContent');
-    if (el) el.innerHTML = `
-      <div class="score-grid">
-        <div class="score-item"><div class="num">${s.total}</div><div class="label">Reviewed</div></div>
-        <div class="score-item"><div class="num" style="color:#006644">${s.accepted}</div><div class="label">Accepted</div></div>
-        <div class="score-item"><div class="num" style="color:#bf2600">${s.rejected}</div><div class="label">Rejected</div></div>
-        <div class="score-item"><div class="num" style="color:#0052cc">${rateStr}</div><div class="label">Score / 10</div></div>
-      </div>
-      <div class="score-bar" style="margin-top:16px;">
-        <div class="bar-track"><div class="bar-fill" style="width:${Math.min(pct,100)}%"></div></div>
-        <div class="bar-label">${pct}% accepted — goal: 90%</div>
-      </div>
-    `;
-  } catch(e) {}
+  /* The acceptance scoreboard has moved to the Quality tab (/api/quality). */
 }
 
 function setActionBtns(disabled) {

@@ -318,3 +318,9 @@ def reject(key: str, body: RejectRequest):
 @app.get("/api/scoreboard")
 def scoreboard():
     return store.get_scoreboard()
+
+
+@app.get("/api/quality")
+def quality():
+    """RCA-quality analytics for the Quality tab (accept/reject + VERDICT + cause)."""
+    return store.get_quality_stats()
