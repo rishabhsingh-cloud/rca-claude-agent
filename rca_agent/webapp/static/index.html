@@ -610,8 +610,8 @@ function renderRcaContent(ticket) {
       });
       html += '</div></details>';
     }
-    // Fix Suggester lives in its own section (also used standalone on the Dev Agent tab).
-    html += `<div style="border-top:1px solid #eee;padding-top:12px;">${renderFixSection(ticket)}</div>`;
+    // Fix Suggester is intentionally NOT shown on the Triage tab — it lives only on
+    // the Dev Agent tab (selectTicket renders renderFixSection there).
     return html;
   }
   if (ticket.status === 'pending') {
