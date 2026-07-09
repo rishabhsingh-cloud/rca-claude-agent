@@ -41,17 +41,33 @@ import re as _re
 
 _DATE_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
+# The work types (Jira issue types) the AUT project defines. Whitelisted so a
+# value picked in the UI dropdown is interpolated into JQL only if it's a known
+# type — the value can never be used to inject arbitrary JQL.
+_WORK_TYPES = ("New Feature", "Task", "Bug", "Epic", "Subtask",
+               "Enhancement", "Maintenance", "Incident", "Defect")
+
 
 @app.get("/api/tickets")
-def list_tickets(from_date: str = "", to_date: str = "", include_resolved: bool = False):
-    """Fetch AUT bug/incident tickets from Jira (optionally date-filtered) and sync locally.
+def list_tickets(from_date: str = "", to_date: str = "", include_resolved: bool = False,
+                 work_type: str = "bug_incident"):
+    """Fetch AUT tickets from Jira (optionally date-filtered) and sync locally.
 
     from_date / to_date are YYYY-MM-DD (inclusive). Anything not matching that
     exact shape is ignored, so the values can't be used to inject JQL.
     include_resolved=True drops the 'not Done' filter so closed tickets show too.
+    work_type selects the issue type(s): "bug_incident" (default) = Bug + Incident,
+    "all" = every type, or one exact name from _WORK_TYPES. Unknown values fall
+    back to the default, so the param can't inject JQL.
     """
     jira = _jira()
-    clauses = ["project = AUT", "issuetype in (Bug, Incident)"]
+    clauses = ["project = AUT"]
+    if work_type == "all":
+        pass  # no issuetype filter — every work type
+    elif work_type in _WORK_TYPES:
+        clauses.append(f'issuetype = "{work_type}"')
+    else:  # "bug_incident" default, and any unrecognized value
+        clauses.append("issuetype in (Bug, Incident)")
     if not include_resolved:
         clauses.append("statusCategory != Done")
     if _DATE_RE.match(from_date):

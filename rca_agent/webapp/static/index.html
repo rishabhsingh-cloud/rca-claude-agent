@@ -169,6 +169,21 @@
     <div class="filter-bar">
       <input type="text" id="searchBox" placeholder="Search key or title..." oninput="renderTicketList()">
       <div id="triageFilters">
+        <label style="display:block;font-size:11px;color:#5e6c84;margin-bottom:8px;">Work type
+          <select id="workType" onchange="loadTickets()" style="width:100%;padding:6px 8px;border:1px solid #dfe1e6;border-radius:4px;font-size:12px;margin-top:2px;">
+            <option value="bug_incident">Bug + Incident</option>
+            <option value="all">All work types</option>
+            <option value="Bug">Bug</option>
+            <option value="Incident">Incident</option>
+            <option value="Defect">Defect</option>
+            <option value="Task">Task</option>
+            <option value="Enhancement">Enhancement</option>
+            <option value="New Feature">New Feature</option>
+            <option value="Maintenance">Maintenance</option>
+            <option value="Epic">Epic</option>
+            <option value="Subtask">Subtask</option>
+          </select>
+        </label>
         <div class="date-row">
           <label>From<input type="date" id="fromDate" onchange="loadTickets()"></label>
           <label>To<input type="date" id="toDate" onchange="loadTickets()"></label>
@@ -278,17 +293,23 @@ function renderQuality(s) {
     const pct = Math.round(n / vTotal * 100);
     vh += `<div style="margin-bottom:10px;"><div style="display:flex;justify-content:space-between;font-size:13px;color:#172b4d;"><span>${k}</span><span style="color:#5e6c84;">${n} · ${pct}%</span></div>${qbar(pct, vColor[k])}</div>`;
   });
-  h += `<div class="card"><h3>By verdict</h3>${vh}</div>`;
 
+  // Show every possible cause bucket (even at 0), so the reviewer sees the full
+  // set of categories the agent can assign — not just the ones seen so far.
   const causes = s.by_cause || {};
-  const maxC = Math.max(1, ...Object.values(causes));
-  const keys = Object.keys(causes).sort((a, b) => causes[b] - causes[a]);
-  let ch = keys.length ? '' : '<div style="font-size:13px;color:#5e6c84;">No RCAs yet.</div>';
-  keys.forEach(c => {
-    const n = causes[c], b = CAUSE_BUCKETS[c] || CAUSE_BUCKETS.unknown;
+  const order = ['code', 'data', 'infrastructure', 'third_party', 'user_side', 'ux'];
+  if (causes.unknown) order.push('unknown');
+  const maxC = Math.max(1, ...order.map(c => causes[c] || 0));
+  let ch = '';
+  order.forEach(c => {
+    const n = causes[c] || 0, b = CAUSE_BUCKETS[c] || CAUSE_BUCKETS.unknown;
     ch += `<div style="margin-bottom:10px;"><div style="display:flex;justify-content:space-between;font-size:13px;color:#172b4d;"><span>${b.label}</span><span style="color:#5e6c84;">${n}</span></div>${qbar(n / maxC * 100, b.fg)}</div>`;
   });
-  h += `<div class="card"><h3>By cause bucket</h3>${ch}</div>`;
+
+  h += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+    <div class="card"><h3>By verdict</h3>${vh}</div>
+    <div class="card"><h3>By cause bucket</h3>${ch}</div>
+  </div>`;
   return h;
 }
 
@@ -312,16 +333,19 @@ async function loadTickets() {
   const from = document.getElementById('fromDate').value;
   const to = document.getElementById('toDate').value;
   const incl = document.getElementById('includeResolved').checked;
+  const workType = document.getElementById('workType').value;
   // Remember the filters so a page refresh doesn't reset them.
   try {
     localStorage.setItem('triage.fromDate', from);
     localStorage.setItem('triage.toDate', to);
     localStorage.setItem('triage.includeResolved', incl ? 'true' : 'false');
+    localStorage.setItem('triage.workType', workType);
   } catch (e) {}
   const qs = new URLSearchParams();
   if (from) qs.set('from_date', from);
   if (to) qs.set('to_date', to);
   if (incl) qs.set('include_resolved', 'true');
+  if (workType) qs.set('work_type', workType);
   try {
     const res = await fetch('/api/tickets?' + qs.toString());
     tickets = await res.json();
@@ -846,15 +870,22 @@ function escHtml(s) {
   const today = new Date();
   const weekAgo = new Date();
   weekAgo.setDate(today.getDate() - 7);
-  let savedFrom, savedTo, savedIncl;
+  let savedFrom, savedTo, savedIncl, savedWorkType;
   try {
     savedFrom = localStorage.getItem('triage.fromDate');
     savedTo = localStorage.getItem('triage.toDate');
     savedIncl = localStorage.getItem('triage.includeResolved');
+    savedWorkType = localStorage.getItem('triage.workType');
   } catch (e) {}
   document.getElementById('fromDate').value = savedFrom || fmt(weekAgo);
-  document.getElementById('toDate').value = savedTo || fmt(today);
+  // Don't let a stale saved 'To' date (e.g. yesterday's) silently hide tickets
+  // created today — bump it up to today if it's in the past.
+  const todayStr = fmt(today);
+  let toVal = savedTo || todayStr;
+  if (toVal < todayStr) toVal = todayStr;
+  document.getElementById('toDate').value = toVal;
   document.getElementById('includeResolved').checked = savedIncl === 'true';
+  if (savedWorkType) document.getElementById('workType').value = savedWorkType;
 })();
 
 styleTabs();
