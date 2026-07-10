@@ -7,7 +7,7 @@ import json
 from rca_agent.config import FIXTURES_DIR, get_settings
 from rca_agent.gitlab_client import MockGitLabClient
 from rca_agent.graph import build_graph_from_sources
-from rca_agent.graph_store import build_repo_graph, load_repo_graph
+from rca_agent.graph_store import build_repo_graph, clear_cache, load_repo_graph
 from rca_agent.graphify_adapter import from_graphify_json
 from rca_agent.investigation import investigate
 from rca_agent.summarize import generate_summary
@@ -57,6 +57,23 @@ def test_persisted_artifact_loads_and_matches_build():
     built = build_repo_graph(PROJECT)
     assert set(loaded.nodes) == set(built.nodes)
     assert loaded.has_edge("compute_total", "subtotal")
+
+
+def test_cache_reloads_when_artifact_mtime_changes():
+    # A long-lived process must pick up a nightly re-index (which rewrites the
+    # graph JSON) instead of serving the snapshot it first loaded.
+    import os
+    clear_cache()
+    art = FIXTURES_DIR / "graphs" / "acme__billing-service.json"
+    orig = art.stat()
+    g1 = load_repo_graph(PROJECT)
+    assert load_repo_graph(PROJECT) is g1          # unchanged mtime -> cached, same object
+    try:
+        os.utime(art, (orig.st_atime, orig.st_mtime + 5))   # simulate a re-index write
+        assert load_repo_graph(PROJECT) is not g1  # mtime bumped -> reloaded fresh
+    finally:
+        os.utime(art, (orig.st_atime, orig.st_mtime))       # restore fixture mtime
+        clear_cache()
 
 
 # --- summary generator ---------------------------------------------------------

@@ -20,7 +20,10 @@ from .config import FIXTURES_DIR, Settings, index_dir
 from .graph import RepoGraph, build_graph_from_sources
 from .graphify_adapter import from_graphify_json
 
-_cache: dict[str, RepoGraph] = {}
+# project -> (source-file mtime when cached, graph). The mtime lets a long-lived
+# process (the webapp) notice when the nightly re-indexer rewrites the graph JSON
+# on disk and reload it, instead of serving the snapshot it loaded at startup.
+_cache: dict[str, tuple[float | None, RepoGraph]] = {}
 
 
 def _graph_artifact(project: str) -> Path:
@@ -76,17 +79,30 @@ def build_repo_graph(project: str, client=None, settings: Settings | None = None
     return build_graph_from_sources(project, files, sha=sha)
 
 
+def _artifact_mtime(art: Path, gfy: Path) -> float | None:
+    """Modification time of whichever on-disk artifact load_repo_graph would use,
+    or None when the graph is built from source (nothing on disk to watch)."""
+    src = art if art.exists() else (gfy if gfy.exists() else None)
+    return src.stat().st_mtime if src else None
+
+
 def load_repo_graph(project: str, settings: Settings | None = None) -> RepoGraph:
     """Cached graph for a project, in order of preference:
       1. published AST graph map (directed, precise) — fixtures/graphs/<proj>.json
       2. graphify export (multi-language bridge)      — <proj>.graphify.json
       3. built from source on the fly
-    """
-    if project in _cache:
-        return _cache[project]
 
+    The cache is invalidated when the on-disk artifact's mtime changes, so a
+    long-lived process picks up a nightly re-index without a restart.
+    """
     art = _graph_artifact(project)
     gfy = _graphify_export(project)
+    mtime = _artifact_mtime(art, gfy)
+
+    cached = _cache.get(project)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+
     if art.exists():
         g = RepoGraph.from_json(json.loads(art.read_text(encoding="utf-8")))
     elif gfy.exists():
@@ -97,7 +113,7 @@ def load_repo_graph(project: str, settings: Settings | None = None) -> RepoGraph
     else:
         g = build_repo_graph(project, settings)
 
-    _cache[project] = g
+    _cache[project] = (mtime, g)
     return g
 
 

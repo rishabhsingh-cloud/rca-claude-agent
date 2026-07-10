@@ -62,8 +62,17 @@ def reindex_all() -> None:
     for project in REPOS:
         try:
             ref = client.default_ref(project)
-            _log(f"{project}: indexing (ref={ref})...")
-            gp, sp = build_index(project, date=today, ref=ref)
+            # Resolve the branch to the exact commit we're indexing and STAMP the
+            # graph/summary with it, so the RCA tools can report how stale the map
+            # is (graph_sha). Best-effort: if the lookup fails, index unstamped
+            # rather than skipping the repo.
+            try:
+                head = client.get_commit(project, ref)
+                sha = head.id if head else None
+            except Exception:
+                sha = None
+            _log(f"{project}: indexing (ref={ref}, sha={(sha or '?')[:8]})...")
+            gp, sp = build_index(project, date=today, ref=ref, sha=sha)
             _log(f"{project}: done -> {gp.name}, {sp.name}")
         except Exception as e:
             _log(f"{project}: FAILED — {type(e).__name__}: {str(e)[:120]}")

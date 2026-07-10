@@ -121,7 +121,7 @@ def build_rca_server(client: GitLabClient):
     async def find_callers(args):
         g = load_repo_graph(args["project"])
         callers = g.callers_of(args["symbol"])
-        return _ok({"symbol": args["symbol"],
+        return _ok({"symbol": args["symbol"], "graph_sha": g.sha,
                     "callers": [{**n.__dict__, "provenance": p} for n, p in callers]})
 
     @tool("find_dependents",
@@ -130,7 +130,8 @@ def build_rca_server(client: GitLabClient):
           {"project": str, "module": str})
     async def find_dependents(args):
         g = load_repo_graph(args["project"])
-        return _ok({"module": args["module"], "dependents": g.dependents_of(args["module"])})
+        return _ok({"module": args["module"], "graph_sha": g.sha,
+                    "dependents": g.dependents_of(args["module"])})
 
     @tool("get_subgraph",
           "Code graph: callers + callees around a symbol to a given depth. Returns "
@@ -138,7 +139,8 @@ def build_rca_server(client: GitLabClient):
           {"project": str, "symbol": str, "depth": int})
     async def get_subgraph(args):
         g = load_repo_graph(args["project"])
-        return _ok(g.get_subgraph(args["symbol"], int(args.get("depth") or 1)))
+        return _ok({**g.get_subgraph(args["symbol"], int(args.get("depth") or 1)),
+                    "graph_sha": g.sha})
 
     @tool("graph_has_edge",
           "Code graph guardrail: does a caller->callee edge actually exist? Call "
@@ -146,7 +148,7 @@ def build_rca_server(client: GitLabClient):
           {"project": str, "caller": str, "callee": str})
     async def graph_has_edge(args):
         g = load_repo_graph(args["project"])
-        return _ok({"caller": args["caller"], "callee": args["callee"],
+        return _ok({"caller": args["caller"], "callee": args["callee"], "graph_sha": g.sha,
                     "has_edge": g.has_edge(args["caller"], args["callee"])})
 
     @tool("search_symbols",
@@ -159,7 +161,8 @@ def build_rca_server(client: GitLabClient):
         g = load_repo_graph(args["project"])
         terms = [t for t in args["query"].lower().split() if len(t) > 2]
         hits = g.search_symbols(terms)
-        return _ok({"symbols": [{"qualname": n.qualname, "file": n.file, "line": n.line}
+        return _ok({"graph_sha": g.sha,
+                    "symbols": [{"qualname": n.qualname, "file": n.file, "line": n.line}
                                 for n in hits]})
 
     @tool("search_code",
