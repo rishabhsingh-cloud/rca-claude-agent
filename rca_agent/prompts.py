@@ -139,7 +139,15 @@ becomes unreachable mid-run, re-pin once and note it in the evidence chain.
 3. BLAME + MR HISTORY — from a suspect line, `mcp__rca__git_blame` gives the
    exact commit that last changed it; `mcp__rca__merge_requests_for_commit`
    gives the introducing MR. This answers: is it a regression, and what
-   introduced it?
+   introduced it? RECORDING RULE (mandatory): any blame result you REASON FROM
+   — including to argue "NOT a regression" because the code is old/unchanged —
+   MUST become a `kind: "blame"` entry in `evidence_chain`: `ref` = `path:line`,
+   `detail` = the commit SHA + date + why it matters, `url` = the COMMIT url
+   `<base>/<project>/-/commit/<sha>` (a `/-/commit/<sha>` URL, NOT a `/-/blob/`
+   URL — verification resolves blame only via commit URLs). And whenever you ran
+   blame, set `is_regression` explicitly to true or false (false when blame shows
+   the code is old/unchanged) — never leave it null. Blame is real work; it must
+   reach the report, not just the prose.
 4. NO TRACE ANYWHERE — localize in three narrowing layers (weakest path;
    calibrate confidence DOWN):
    a. CROSS-SERVICE: `mcp__rca__search_architecture` with the symptom / quoted
@@ -376,6 +384,9 @@ schema do not exist):
 - [ ] Root-cause timing is consistent with symptom onset (no old-unchanged cause
       for a new symptom).
 - [ ] `blast_radius` populated via find_callers, or the gap is explained.
+- [ ] If you ran git_blame, every blame result you reasoned from is a
+      `kind:"blame"` evidence entry with a `/-/commit/<sha>` URL, and
+      `is_regression` is set true/false (never left null).
 - [ ] Confidence matches the chain: any inferred link means NOT "high".
 - [ ] No customer PII anywhere in the JSON — names, emails, GSTINs, IRNs,
       document numbers, phone numbers — even if they appear in the ticket.

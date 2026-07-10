@@ -16,6 +16,7 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     ResultMessage,
     TextBlock,
+    ToolUseBlock,
     query,
 )
 
@@ -35,8 +36,10 @@ class AgentRunError(RuntimeError):
 async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClient,
                     settings: Settings, jira_mcp: bool = False,
                     max_turns: int = 60,
-                    images: list[dict] | None = None) -> tuple[str, int]:
-    """Run one investigation through the agent loop; return (final_text, turns_used).
+                    images: list[dict] | None = None) -> tuple[str, int, set[str]]:
+    """Run one investigation through the agent loop; return
+    (final_text, turns_used, tools_used) — tools_used is the set of tool names the
+    agent actually invoked (e.g. "mcp__rca__git_blame"), used by post-hoc guards.
 
     Jira integration (two modes):
       - FETCH-THEN-PASS (default, recommended): the orchestrator fetches the
@@ -103,6 +106,7 @@ async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClie
 
     final_text = ""
     turns_used = 0
+    tools_used: set[str] = set()
     try:
         async for message in query(prompt=prompt, options=options):
             if isinstance(message, AssistantMessage):
@@ -110,6 +114,8 @@ async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClie
                 for block in message.content:
                     if isinstance(block, TextBlock):
                         final_text = block.text
+                    elif isinstance(block, ToolUseBlock):
+                        tools_used.add(block.name)
             elif isinstance(message, ResultMessage):
                 subtype = getattr(message, "subtype", None)
                 result = getattr(message, "result", None) or ""
@@ -133,7 +139,7 @@ async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClie
         raise AgentRunError(
             "agent did not emit a verdict (likely hit max_turns mid-compose): "
             f"{final_text[:150] or 'no output'}")
-    return final_text, turns_used
+    return final_text, turns_used, tools_used
 
 
 def _looks_like_verdict(text: str) -> bool:
@@ -217,3 +223,18 @@ def parse_verdict(text: str, ticket_key: str) -> Verdict:
         candidates=d.get("candidates", []) or [],
         notes=d.get("notes", ""),
     )
+
+
+def blame_dropped_note(verdict: Verdict, tools_used: set[str]) -> str:
+    """Post-hoc guard: if the agent ran git_blame but the verdict doesn't record
+    it, warn. Blame is real work — dropping it means the introducing commit isn't
+    clickable and `is_regression` silently stays unknown. Returns a one-line
+    `[auto-check]` note (empty string when nothing's wrong)."""
+    if not any(t.endswith("git_blame") for t in tools_used):
+        return ""
+    problems = []
+    if not any(e.kind in ("blame", "commit") for e in verdict.evidence_chain):
+        problems.append("git_blame was run but no blame/commit evidence was recorded")
+    if verdict.is_regression is None:
+        problems.append("is_regression left unset despite blame being gathered")
+    return "[auto-check] " + "; ".join(problems) if problems else ""

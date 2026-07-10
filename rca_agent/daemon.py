@@ -79,7 +79,7 @@ async def poll_once(jql: str, post_mode: str, max_tickets: int) -> int:
         key = issue.get("key")
         try:
             tkey, text = jira.get(key, drop_rca_comments=True)
-            raw, _turns = await run_agent(tkey, text, client, settings, jira_mcp=False)
+            raw, _turns, _tools = await run_agent(tkey, text, client, settings, jira_mcp=False)
             v = parse_verdict(raw, tkey)
             vr = verify_verdict(v, client)
             if vr.total:

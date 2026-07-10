@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from ..agent import parse_verdict, run_agent
+from ..agent import blame_dropped_note, parse_verdict, run_agent
 from ..config import get_settings
 from ..gitlab_client import build_client
 from ..jira import JiraClient
@@ -128,7 +128,7 @@ def _run_rca_background(key: str) -> None:
             text = text + "\n\n" + pdf_block
         # Hard ceiling: a hung/runaway agent must not wedge the DB row at
         # 'running' forever — on timeout we fall through to mark_failed.
-        raw, turns_used = asyncio.run(
+        raw, turns_used, tools_used = asyncio.run(
             asyncio.wait_for(
                 run_agent(tkey, text, client, s, jira_mcp=False, images=images),
                 timeout=RCA_TIMEOUT_SECONDS,
@@ -140,6 +140,10 @@ def _run_rca_background(key: str) -> None:
             note = vr.as_note()
             v.notes = (v.notes + "\n\n" + note).strip() if v.notes else note
             v.confidence = vr.downgraded_confidence(v.confidence)
+        # Guard: blame gathered but not recorded (introducing commit lost, is_regression unset).
+        bnote = blame_dropped_note(v, tools_used)
+        if bnote:
+            v.notes = (v.notes + "\n\n" + bnote).strip() if v.notes else bnote
         store.save_rca(key, json.dumps(v.to_dict()), turns_used=turns_used)
     except (asyncio.TimeoutError, TimeoutError):
         mins = RCA_TIMEOUT_SECONDS // 60
