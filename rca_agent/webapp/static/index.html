@@ -529,6 +529,20 @@ const VERDICT_COLORS = {
   'Needs review': {bg: '#fffae6', fg: '#974f0c'},   // amber — a human must decide
 };
 
+// Parse a response as JSON, but degrade gracefully when the body ISN'T JSON —
+// e.g. an nginx 504/502 HTML page returned when a request (like the 3-4 min fix
+// run) outlasts the proxy's read timeout. Returns a {detail} object so callers
+// show a real message instead of a raw "Unexpected token '<'" parse error.
+async function safeJson(r) {
+  try {
+    return await r.json();
+  } catch (e) {
+    return {detail: `Server returned ${r.status}${r.statusText ? ' ' + r.statusText : ''} `
+      + `with a non-JSON body — the request likely ran longer than the proxy allows. `
+      + `Try again; if it keeps happening the proxy read timeout needs raising.`};
+  }
+}
+
 // ---- Fix Suggester (Phase 1, dry-run — nothing is pushed) ----
 async function suggestFix(key) {
   const btn = document.getElementById('fixBtn');
@@ -538,7 +552,7 @@ async function suggestFix(key) {
   out.innerHTML = '';
   try {
     const r = await fetch(`/api/tickets/${key}/suggest_fix`, {method: 'POST'});
-    const d = await r.json();
+    const d = await safeJson(r);
     out.innerHTML = r.ok ? renderFix(d, key)
       : `<div style="color:#bf2600;font-size:13px;">${escHtml(d.detail || 'Fix generation failed')}</div>`;
     // Cache on the in-memory ticket so re-selecting it this session keeps the fix;
@@ -618,7 +632,7 @@ async function rejectFix(key) {
   try {
     const r = await fetch(`/api/tickets/${key}/reject_fix`, {method: 'POST'});
     if (!r.ok) {
-      const d = await r.json().catch(() => ({}));
+      const d = await safeJson(r);
       showToast(d.detail || 'Reject failed', true);
       return;
     }
@@ -638,7 +652,7 @@ async function raiseMr(key) {
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Raising draft MR…'; }
   try {
     const r = await fetch(`/api/tickets/${key}/raise_mr`, {method: 'POST'});
-    const d = await r.json();
+    const d = await safeJson(r);
     if (!r.ok) {
       showToast(d.detail || 'Raise MR failed', true);
       if (btn) { btn.disabled = false; btn.textContent = '⬆ Raise draft MR'; }
