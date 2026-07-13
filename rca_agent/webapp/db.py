@@ -3,15 +3,29 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "rca_reviews.db"
 
 
-def _conn() -> sqlite3.Connection:
+@contextmanager
+def _conn():
+    """Yield a SQLite connection and ALWAYS close it.
+
+    Trap: `with sqlite3.connect(...) as con` commits/rolls back the transaction
+    but does NOT close the connection. The old `return con` here therefore leaked
+    one open file handle on every DB call; with the dashboard polling constantly,
+    the process eventually hit its fd limit (OSError [Errno 24] Too many open
+    files) and stopped accepting connections. Committing still happens via the
+    inner `with con`; the `finally` guarantees the handle is released."""
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
-    return con
+    try:
+        with con:
+            yield con
+    finally:
+        con.close()
 
 
 def init_db() -> None:

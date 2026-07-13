@@ -274,6 +274,10 @@ class RestGitLabClient:
         )
         self._default_ref_cache: dict[str, str] = {}
 
+    def close(self) -> None:
+        """Release the underlying httpx connection pool (and its sockets)."""
+        self._client.close()
+
     def _pid(self, project: str) -> str:
         return quote(project, safe="") if "/" in project else project
 

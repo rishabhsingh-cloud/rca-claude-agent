@@ -85,6 +85,16 @@ class JiraClient:
             headers={"Authorization": f"Basic {cred}", "Accept": "application/json"},
         )
 
+    def close(self) -> None:
+        """Release the underlying httpx connection pool (and its sockets)."""
+        self._client.close()
+
+    def __enter__(self) -> "JiraClient":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
     def get_issue(self, key: str) -> dict:
         ep = f"{self._base}/issue/{key}"
         r = self._client.get(ep, params={"fields": self._FIELDS})

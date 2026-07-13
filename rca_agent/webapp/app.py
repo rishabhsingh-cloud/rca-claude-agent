@@ -25,11 +25,30 @@ app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 store.init_db()
 
 
+# One long-lived client per process, reused across requests and the RCA background
+# thread. Both wrap a thread-safe httpx.Client with its own connection pool — creating
+# a fresh one per request (the old behavior) leaked a pool/socket on every call and
+# eventually exhausted the process's fd limit. httpx.Client is safe to share.
+_jira_client: JiraClient | None = None
+_gl_client = None
+
+
 def _jira() -> JiraClient:
+    global _jira_client
     s = get_settings()
     if not s.has_jira:
         raise HTTPException(500, "Jira not configured")
-    return JiraClient(s.jira_url, s.jira_email, s.jira_token)
+    if _jira_client is None:
+        _jira_client = JiraClient(s.jira_url, s.jira_email, s.jira_token)
+    return _jira_client
+
+
+def _gl():
+    """Cached GitLab client (mock or live), reused across requests."""
+    global _gl_client
+    if _gl_client is None:
+        _gl_client = build_client(get_settings())
+    return _gl_client
 
 
 @app.get("/")
@@ -115,8 +134,8 @@ def _run_rca_background(key: str) -> None:
     from ..agent import AgentRunError
     s = get_settings()
     try:
-        jira = JiraClient(s.jira_url, s.jira_email, s.jira_token)
-        client = build_client(s)
+        jira = _jira()
+        client = _gl()
         tkey, text = jira.get(key, drop_all_comments=True)
         attachments = jira.get_all_attachments(key)
         images = attachments["images"] or None
@@ -199,7 +218,7 @@ async def suggest_fix_endpoint(key: str):
         raise HTTPException(400, "No RCA found for this ticket — run RCA first")
     verdict = json.loads(ticket["bot_rca_json"])
     s = get_settings()
-    client = build_client(s)
+    client = _gl()
     try:
         # Multi-file fixes legitimately explore for ~4 min; keep this comfortably above
         # the fix agent's own exploration budget (_MAX_TURNS) so a real run isn't killed
@@ -226,7 +245,7 @@ def raise_mr_endpoint(key: str):
         raise HTTPException(400, "No fix suggestion found — run the dev agent first")
     fix = json.loads(ticket["bot_fix_json"])
     s = get_settings()
-    client = build_client(s)
+    client = _gl()
     res = raise_mr(key, fix, client)
     if res.get("error"):
         raise HTTPException(400, res["error"])

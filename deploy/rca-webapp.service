@@ -13,6 +13,10 @@ ExecStart=/home/rishabh/rca-claude-agent/.venv/bin/python3 -m uvicorn \
     rca_agent.webapp.app:app --host 0.0.0.0 --port 8000
 Restart=always
 RestartSec=5
+# Headroom against fd exhaustion. The real fix is closing connections in-app; this
+# is a backstop — the leak degrades (accept() fails) rather than crashing, so
+# Restart=always never triggers, making the ceiling the last line of defense.
+LimitNOFILE=65536
 StandardOutput=journal
 StandardError=journal
 
