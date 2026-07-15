@@ -38,7 +38,7 @@ jobs:
         run: git -C /home/rishabh/rca-claude-agent pull
 
       - name: Install / upgrade package
-        run: /home/rishabh/rca-claude-agent/.venv/bin/pip install -e ".[live,webapp,appdb]"
+        run: /home/rishabh/rca-claude-agent/.venv/bin/pip install -e ".[live,webapp,appdb,trace]"
         working-directory: /home/rishabh/rca-claude-agent
 
       - name: Install / refresh webapp systemd unit
