@@ -16,10 +16,13 @@ Importing this module requires `claude-agent-sdk`. The offline pipeline
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from dataclasses import asdict
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
+
+from . import trace as _trace
 
 from .app_db import query_postgres as _query_postgres
 from .app_mongo import query_mongo as _query_mongo
@@ -46,6 +49,36 @@ def _ok(payload) -> dict:
 def _err(msg: str) -> dict:
     return {"content": [{"type": "text", "text": json.dumps({"error": msg})}],
             "is_error": True}
+
+
+def _traced_tool(t):
+    """Wrap an SdkMcpTool handler so each call emits a Langfuse span with the full
+    input (args) and output. No-op when tracing is disabled. Never breaks the tool:
+    a tracing error degrades to a plain call."""
+    orig = t.handler
+    span_name = f"mcp__rca__{t.name}"
+
+    async def wrapped(args):
+        with _trace.tool_span(span_name, args) as set_out:
+            res = await orig(args)
+            try:
+                ok = not (isinstance(res, dict) and res.get("is_error"))
+                out = res
+                if isinstance(res, dict) and res.get("content"):
+                    out = res["content"][0].get("text", res)  # the JSON text the model sees
+                set_out(out, ok=ok)
+            except Exception:
+                pass
+            return res
+
+    try:
+        return dataclasses.replace(t, handler=wrapped)
+    except Exception:
+        try:
+            t.handler = wrapped
+            return t
+        except Exception:
+            return t  # last resort: untraced, but never broken
 
 
 def build_rca_server(client: GitLabClient):
@@ -284,15 +317,19 @@ def build_rca_server(client: GitLabClient):
           "reconciliation errors, and rejected import rows. Use it for ANY import / "
           "portal-fetch / reconciliation failure ticket BEFORE concluding the real "
           "error is unavailable. Pass whatever you have: `gstin`, `ret_period` (e.g. "
-          "'062026'), `reference_id` (import job id) — at least one of gstin/"
-          "reference_id is required. Using a GSTIN as a lookup arg is allowed (it will "
-          "not appear in your verdict). Results are PII-masked; error_case 'gov' means "
-          "the government/NIC portal failed (third_party, not our bug).",
-          {"gstin": str, "ret_period": str, "reference_id": str})
+          "'062026'), `reference_id` (import job id), and/or `doc_number` (the "
+          "invoice/document number — read it from the ticket text OR an attached "
+          "screenshot; it opens the detailed rejected-row store fast). At least one of "
+          "gstin/reference_id/doc_number is required. Using a GSTIN/doc_number as a "
+          "lookup arg is allowed (they will not appear in your verdict). If an "
+          "`exception`/error reads like a Python error, it is OUR code bug (see _hint) "
+          "— localize it, do NOT call it user_side. Results are PII-masked; error_case "
+          "'gov' means the government/NIC portal failed (third_party, not our bug).",
+          {"gstin": str, "ret_period": str, "reference_id": str, "doc_number": str})
     async def find_error_reason(args):
         return _ok(_find_error_reason(
             args.get("gstin", ""), args.get("ret_period", ""),
-            args.get("reference_id", "")))
+            args.get("reference_id", ""), args.get("doc_number", "")))
 
     @tool("query_app_data",
           "Read-only MongoDB lookup against the business documents (GSTR-3B "
@@ -321,6 +358,7 @@ def build_rca_server(client: GitLabClient):
              search_nr_errors, search_nr_logs, query_nr,
              find_request_ids, trace_request, query_users_db,
              find_error_reason, query_app_data]
+    tools = [_traced_tool(t) for t in tools]  # Layer 2: per-tool input/output spans
     server = create_sdk_mcp_server(name="rca", version="0.1.0", tools=tools)
     tool_names = [
         "mcp__rca__parse_stack_trace",

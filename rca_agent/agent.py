@@ -20,6 +20,7 @@ from claude_agent_sdk import (
     query,
 )
 
+from . import trace as _trace
 from .config import Settings
 from .gitlab_client import GitLabClient
 from .jira import atlassian_allowed_tools, atlassian_mcp_server_config
@@ -104,42 +105,79 @@ async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClie
     else:
         prompt = text_part
 
+    run_meta = {
+        "ticket_key": ticket_key, "model": settings.model, "max_turns": max_turns,
+        "backend": getattr(settings, "backend", None),
+        "has_images": bool(images), "image_count": len(images) if images else 0,
+        "jira_mcp": jira_mcp,
+    }
     final_text = ""
     turns_used = 0
     tools_used: set[str] = set()
-    try:
-        async for message in query(prompt=prompt, options=options):
-            if isinstance(message, AssistantMessage):
-                turns_used += 1
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        final_text = block.text
-                    elif isinstance(block, ToolUseBlock):
-                        tools_used.add(block.name)
-            elif isinstance(message, ResultMessage):
-                subtype = getattr(message, "subtype", None)
-                result = getattr(message, "result", None) or ""
-                # Infra failure (out of credits, rate limit, overload, …) surfaces
-                # as a non-success result — raise loudly so it can't be parsed into
-                # a fake "insufficient_evidence" verdict and posted to a ticket.
-                if subtype not in (None, "success") or getattr(message, "is_error", False):
-                    raise AgentRunError(f"agent run failed ({subtype}): {result[:200]}")
-                if result:
-                    final_text = result
-    except AgentRunError:
-        raise  # infra failure always propagates
-    except Exception:
-        # Hit max_turns mid-run — keep a partial verdict rather than crashing.
-        if not final_text:
-            raise
-    # A real verdict must PARSE as a JSON object with verdict fields. Prose (even
-    # with stray braces from set notation), an error string, or a cut-off
-    # mid-compose all fail here — raise loudly instead of faking an LOW verdict.
-    if not _looks_like_verdict(final_text):
-        raise AgentRunError(
-            "agent did not emit a verdict (likely hit max_turns mid-compose): "
-            f"{final_text[:150] or 'no output'}")
+    hit_max = False
+    with _trace.run_trace(f"rca-{ticket_key}", run_meta) as _run:
+        try:
+            async for message in query(prompt=prompt, options=options):
+                if isinstance(message, AssistantMessage):
+                    turns_used += 1
+                    turn_text, turn_tools = [], []
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            final_text = block.text
+                            turn_text.append(block.text)
+                        elif isinstance(block, ToolUseBlock):
+                            tools_used.add(block.name)
+                            turn_tools.append(block.name)
+                    # The turn's reasoning narration + tools it reached for — the
+                    # turn-by-turn record that shows where a run went wrong.
+                    _run.record_turn(turns_used, "\n".join(turn_text), turn_tools)
+                elif isinstance(message, ResultMessage):
+                    subtype = getattr(message, "subtype", None)
+                    result = getattr(message, "result", None) or ""
+                    # Infra failure (out of credits, rate limit, overload, …) surfaces
+                    # as a non-success result — raise loudly so it can't be parsed into
+                    # a fake "insufficient_evidence" verdict and posted to a ticket.
+                    if subtype not in (None, "success") or getattr(message, "is_error", False):
+                        _run.finish(status=f"infra_failure:{subtype}", emitted_verdict=False,
+                                    turns_used=turns_used, hit_max_turns=False,
+                                    tools_used=tools_used, verdict=None, output=result[:500])
+                        raise AgentRunError(f"agent run failed ({subtype}): {result[:200]}")
+                    if result:
+                        final_text = result
+        except AgentRunError:
+            raise  # infra failure always propagates (trace already finished above)
+        except Exception:
+            # Hit max_turns mid-run — keep a partial verdict rather than crashing.
+            hit_max = True
+            if not final_text:
+                _run.finish(status="max_turns_no_output", emitted_verdict=False,
+                            turns_used=turns_used, hit_max_turns=True,
+                            tools_used=tools_used, verdict=None)
+                raise
+        # A real verdict must PARSE as a JSON object with verdict fields. Prose (even
+        # with stray braces from set notation), an error string, or a cut-off
+        # mid-compose all fail here — raise loudly instead of faking an LOW verdict.
+        if not _looks_like_verdict(final_text):
+            _run.finish(status="no_verdict", emitted_verdict=False, turns_used=turns_used,
+                        hit_max_turns=hit_max, tools_used=tools_used, verdict=None,
+                        output=final_text[:500])
+            raise AgentRunError(
+                "agent did not emit a verdict (likely hit max_turns mid-compose): "
+                f"{final_text[:150] or 'no output'}")
+        _run.finish(status="success", emitted_verdict=True, turns_used=turns_used,
+                    hit_max_turns=hit_max, tools_used=tools_used,
+                    verdict=_verdict_dict(final_text), output=final_text)
     return final_text, turns_used, tools_used
+
+
+def _verdict_dict(text: str) -> dict | None:
+    """Best-effort parse of the verdict JSON for trace attributes (never raises)."""
+    try:
+        s = text[text.find("{"): text.rfind("}") + 1]
+        d = json.loads(s)
+        return d if isinstance(d, dict) else None
+    except Exception:
+        return None
 
 
 def _looks_like_verdict(text: str) -> bool:
