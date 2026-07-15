@@ -161,11 +161,19 @@ class JiraClient:
                     import io
                     from PIL import Image
                     img = Image.open(io.BytesIO(r.content))
-                    if img.width > 800:
-                        ratio = 800 / img.width
-                        img = img.resize((800, int(img.height * ratio)), Image.LANCZOS)
+                    # Legibility win = the RESOLUTION bump (800 -> ~1568px, the model's
+                    # effective max) + higher JPEG quality (was q60, which smeared
+                    # invoice numbers / GSTINs / error text). We deliberately stay on
+                    # compact JPEG, NOT lossless PNG: the image is sent as base64 over
+                    # the CLI subprocess stdin, and an oversized blob can stall that
+                    # (multimodal) path and hang the run — so keep the payload small.
+                    edge = 1568
+                    if max(img.width, img.height) > edge:
+                        ratio = edge / max(img.width, img.height)
+                        img = img.resize((int(img.width * ratio), int(img.height * ratio)),
+                                         Image.LANCZOS)
                     buf = io.BytesIO()
-                    img.convert("RGB").save(buf, format="JPEG", quality=60)
+                    img.convert("RGB").save(buf, format="JPEG", quality=90)
                     images.append({
                         "filename": att.get("filename", "attachment"),
                         "mimeType": "image/jpeg",

@@ -221,17 +221,26 @@ report the real reason BEFORE concluding it is "only in logs / not retrievable".
 ONE call checks every error store for you (GSTR-1 import exceptions, portal/NIC
 fetch errors, reconciliation errors, rejected import rows) — you do NOT pick a
 collection or write a filter yourself.
-Pass whatever identifiers you can pull FROM THE TICKET:
+Pass whatever identifiers you can pull FROM THE TICKET — INCLUDING FROM ANY
+ATTACHED SCREENSHOT (read the image: the failing invoice grid usually shows the
+document number, GSTIN and period even when the text doesn't):
 - `gstin` — the customer's GSTIN (using it as a lookup argument is allowed and
   expected; it just must not appear in your written verdict),
 - `ret_period` — e.g. "062026", to narrow,
-- `reference_id` — the import job id, to get the specific rejected rows.
-At least a gstin or reference_id is required. Interpret the result:
+- `reference_id` — the import job id, to get the specific rejected rows,
+- `doc_number` — the invoice/document number (from the text OR the screenshot).
+  This opens the detailed rejected-row store directly and fast, so USE IT whenever
+  the ticket shows an invoice number — it is often the only key you'll have.
+At least a gstin, reference_id, or doc_number is required. Interpret the result:
+- if an `exception`/error reads like a PYTHON error ("name 'x' is not defined", a
+  traceback, "has no attribute") it is OUR CODE crashing (see the `_hint`) — treat
+  it as a code bug: grep the named symbol + git_blame; do NOT call it user_side,
 - an `exception` like "inv_typ incorrect" = a bad value in the customer's file
   (data / user_side) — tell support which field to fix,
 - `error_case: "gov"` = the government/NIC portal rejected it (third_party — NOT a
   platform bug),
-- rejected import rows = the exact rows/values the importer refused.
+- rejected import rows = the exact rows/values the importer refused (a doc_number
+  lookup returning nothing may mean the number was misread from the screenshot).
 Report the reason in plain words; never quote a raw customer value. If the tool
 returns "not configured" or finds nothing in every store, note the gap in candidates.
 
