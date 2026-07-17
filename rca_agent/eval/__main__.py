@@ -11,8 +11,8 @@ Typical flow:
   python -m rca_agent.eval upload
   python -m rca_agent.eval run --experiment baseline
 
-`run` requires ANTHROPIC_API_KEY (batch model work must not use a subscription
-profile). Everything is sandboxed from production — see rca_agent/eval/README.md.
+`run` uses the box's ambient Claude auth (the subscription), same as the live agent.
+Everything is sandboxed from production — see rca_agent/eval/README.md.
 """
 
 from __future__ import annotations

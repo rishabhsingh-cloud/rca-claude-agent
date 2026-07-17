@@ -11,8 +11,9 @@ Experiments). Every example cross-links to its trace.
 The compare workflow: run one experiment on the baseline, make a change to the
 agent, run another -> Phoenix shows per-example deltas (what improved / regressed).
 
-Requires ANTHROPIC_API_KEY (batch model work must use the API key, not a
-subscription/OAuth profile, which would hit interactive rate limits mid-run).
+Uses the box's ambient Claude auth (the subscription session), same as the live
+agent — no API key required. Warns (doesn't block) if none is set, since a LARGE
+batch on a subscription can hit interactive rate limits mid-run.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ import argparse
 import os
 import subprocess
 
-from ._common import require_api_key
+from ._common import warn_no_api_key
 from .dataset import DEFAULT_DATASET
 from .evaluators import ALL_EVALUATORS
 from .phoenix_client import base_url, client
@@ -38,7 +39,7 @@ def _git_sha() -> str:
 
 
 def main(argv=None) -> None:
-    require_api_key()
+    warn_no_api_key()
     p = argparse.ArgumentParser(description="Run the RCA agent as a Phoenix experiment.")
     p.add_argument("--name", default=DEFAULT_DATASET, help="Phoenix dataset name")
     p.add_argument("--experiment", default="", help="experiment label (default: git sha)")

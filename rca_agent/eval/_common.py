@@ -1,4 +1,4 @@
-"""Shared helpers for the eval harness: paths, the API-key guard, JSONL I/O."""
+"""Shared helpers for the eval harness: paths, the auth warning, JSONL I/O."""
 
 from __future__ import annotations
 
@@ -12,19 +12,21 @@ DATA = _HERE / "data"
 RESULTS = _HERE / "results"
 
 
-def require_api_key() -> None:
-    """Hard stop unless ANTHROPIC_API_KEY is set.
+def warn_no_api_key() -> None:
+    """Warn (do NOT block) when ANTHROPIC_API_KEY is unset.
 
-    Batch work must run on the API key, not a claude.ai/OAuth subscription profile —
-    a backfill would hammer interactive-tier rate limits and fail mid-run. This guard
-    is deliberate: it stops the eval from silently drawing down a subscription.
+    Production runs the agent on a Claude subscription (OAuth session), not an API
+    key, and the agent subprocess inherits that ambient auth — so a key is NOT
+    required. We only warn, because a LARGE batch on a subscription can hit
+    interactive-tier rate limits mid-run; for a small eval set it's fine.
     """
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        sys.exit(
-            "eval: refusing to run — ANTHROPIC_API_KEY is not set.\n"
-            "Batch RCA must use the API key (a subscription/OAuth profile would hit "
-            "rate limits and fail mid-run). Export ANTHROPIC_API_KEY and re-run."
-        )
+    if os.getenv("ANTHROPIC_API_KEY"):
+        return
+    print(
+        "eval: no ANTHROPIC_API_KEY — using the ambient Claude auth (subscription). "
+        "Fine for a small set; a large batch may hit interactive rate limits mid-run.",
+        file=sys.stderr,
+    )
 
 
 def read_jsonl(path: Path) -> list[dict]:

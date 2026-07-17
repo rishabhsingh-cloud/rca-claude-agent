@@ -17,8 +17,10 @@ compares *meaning* against a human-written reference — not string/field matchi
   `verify_verdict` as-is (via `run.py`) — it measures reality and mutates nothing.
 - **Its own Phoenix project.** Eval runs trace into `rca-eval`, so live prod traces
   (`rca-agent`) stay uncluttered. Same Phoenix server/dashboard, separate tab.
-- **API-key guard.** `run` refuses to start without `ANTHROPIC_API_KEY`, so a batch
-  can't accidentally draw down a claude.ai/OAuth subscription.
+- **Same auth as prod.** Uses the box's ambient Claude auth (the subscription/OAuth
+  session), like the live agent. `run` only *warns* if there's no `ANTHROPIC_API_KEY`
+  — a *large* batch on a subscription can hit interactive rate limits mid-run, but a
+  small eval set is fine.
 - **Ground truth is gitignored** (`data/`) — its prose may quote customer data.
 
 ## Setup
@@ -29,7 +31,9 @@ Runs on the box (EC2), where it can reach Jira/GitLab/DBs **and** the Phoenix se
 # The eval needs the lightweight Phoenix REST client (not the full server):
 /home/rishabh/rca-claude-agent/.venv/bin/pip install -e ".[eval]"
 
-export ANTHROPIC_API_KEY=...          # plus the usual JIRA_* / GITLAB_* env
+# Load the box's env (Jira/GitLab creds, Claude auth, REPOS_DIR, ...) into the shell,
+# so the manually-run CLI + the agent subprocess it spawns both see it:
+set -a; source .env; set +a
 # PHOENIX_BASE_URL defaults to http://localhost:6006 (the local server on the box).
 ```
 

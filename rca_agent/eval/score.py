@@ -31,7 +31,7 @@ from claude_agent_sdk import (
 )
 
 from ..config import get_settings
-from ._common import DATA, RESULTS, latest, read_jsonl, require_api_key, write_jsonl
+from ._common import DATA, RESULTS, latest, read_jsonl, warn_no_api_key, write_jsonl
 
 JUDGE_SYSTEM = """You grade an automated root-cause analysis (RCA) against ground truth.
 The ground truth is the human discussion/resolution recorded on the ticket. Decide
@@ -133,7 +133,7 @@ def _report(scored: list[dict]) -> None:
 
 
 def main(argv=None) -> None:
-    require_api_key()
+    warn_no_api_key()
     p = argparse.ArgumentParser(description="Score an RCA run against ground truth.")
     p.add_argument("--run-file", default="", help="results/run_*.jsonl (default: latest)")
     p.add_argument("--concurrency", type=int, default=3, help="parallel judge calls")

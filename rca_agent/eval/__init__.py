@@ -9,6 +9,7 @@ Isolation guarantees (see README.md):
   - Uses ONLY read paths of Jira/GitLab (search + get); never posts/accepts/writes.
   - Imports the production agent (run_agent), prompts, and verify UNCHANGED — it
     tests reality and never mutates the agent's behavior.
-  - Refuses to run any model batch without ANTHROPIC_API_KEY (batch work must use
-    the API key, not a subscription/OAuth profile, which would hit rate limits).
+  - Uses the box's ambient Claude auth (the subscription), same as the live agent;
+    warns (doesn't block) if no ANTHROPIC_API_KEY, since a large batch on a
+    subscription can hit interactive rate limits mid-run.
 """

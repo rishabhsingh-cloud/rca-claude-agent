@@ -19,7 +19,7 @@ from ..config import get_settings
 from ..gitlab_client import build_client
 from ..jira import JiraClient
 from ..verify import verify_verdict
-from ._common import DATA, RESULTS, read_jsonl, require_api_key, write_jsonl
+from ._common import DATA, RESULTS, read_jsonl, warn_no_api_key, write_jsonl
 
 
 def _fetch(jira: JiraClient, key: str) -> tuple[str, list | None]:
@@ -70,7 +70,7 @@ async def _run(rows: list[dict], concurrency: int, max_turns: int) -> list[dict]
 
 
 def main(argv=None) -> None:
-    require_api_key()
+    warn_no_api_key()
     p = argparse.ArgumentParser(description="Run the RCA agent over the pilot dataset.")
     p.add_argument("--concurrency", type=int, default=2, help="parallel RCA runs (keep small)")
     p.add_argument("--max-turns", type=int, default=60, help="per-run turn budget (production default)")
