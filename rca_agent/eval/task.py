@@ -38,7 +38,7 @@ def _clients():
     with _lock:
         if _settings is None:
             _settings = get_settings()
-            if not _settings.has_jira():
+            if not _settings.has_jira:
                 raise SystemExit(
                     "eval: Jira not configured (JIRA_URL / JIRA_EMAIL / JIRA_TOKEN).")
             _jira = JiraClient(_settings.jira_url, _settings.jira_email, _settings.jira_token)

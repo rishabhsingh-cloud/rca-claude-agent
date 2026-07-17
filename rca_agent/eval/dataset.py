@@ -131,7 +131,7 @@ def seed(limit: int, weeks: int) -> None:
     pull the ticket + its human discussion so YOU can write the true root cause into
     `reference_rca`. Writes data/ground_truth.draft.jsonl (gitignored)."""
     s = get_settings()
-    if not s.has_jira():
+    if not s.has_jira:
         raise SystemExit("eval: Jira not configured (JIRA_URL / JIRA_EMAIL / JIRA_TOKEN).")
     jira = JiraClient(s.jira_url, s.jira_email, s.jira_token)
     jql = (f'project = AUT AND issuetype in (Bug, Incident) AND statusCategory = Done '
