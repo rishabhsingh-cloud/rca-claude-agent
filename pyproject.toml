@@ -19,6 +19,12 @@ appdb = ["psycopg[binary]>=3.1", "pymongo>=4.6"]
 # Optional run tracing to a self-hosted Phoenix (RCA_TRACE=1). Off by default;
 # when the packages are absent or the flag is unset, rca_agent.trace is a no-op.
 trace = ["arize-phoenix-otel>=0.16", "openinference-instrumentation-claude-agent-sdk>=0.1"]
+# Offline eval harness (rca_agent.eval): drives the self-hosted Phoenix server's
+# Datasets/Experiments API. Only the lightweight REST client is needed — NOT the
+# full arize-phoenix server package (kinder to the memory-tight box).
+# Pinned to the client that ships with our Phoenix server (18.0.0) so the eval
+# client can't drift from the server it talks to.
+eval = ["arize-phoenix-client==2.13.0"]
 
 [project.scripts]
 rca = "rca_agent.run:main"
@@ -28,4 +34,4 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["rca_agent", "rca_agent.webapp"]
+packages = ["rca_agent", "rca_agent.webapp", "rca_agent.eval"]

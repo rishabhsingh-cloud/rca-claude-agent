@@ -1,0 +1,4 @@
+# Eval inputs/outputs stay local — they contain ticket text and human comments
+# that may include customer PII. Do not commit.
+data/
+results/
