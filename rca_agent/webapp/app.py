@@ -207,32 +207,57 @@ def rca_status(key: str):
     return result
 
 
-@app.post("/api/tickets/{key}/suggest_fix")
-async def suggest_fix_endpoint(key: str):
-    """Phase 1 (dry-run): propose a minimal code fix for a completed RCA and return
-    the diff + rationale + syntax check. Writes NOTHING to GitLab. Human-initiated."""
+def _suggest_fix_background(key: str) -> None:
+    """Run the (3-4 min) fix agent in a thread and record the result on the job row.
+    Started by the /suggest_fix endpoint, which returns immediately so the reverse
+    proxy never times out a long-open request."""
     import asyncio
+    import traceback
     from ..fix_agent import suggest_fix
+    try:
+        ticket = store.get_ticket(key)
+        verdict = json.loads(ticket["bot_rca_json"])
+        s = get_settings()
+        client = _gl()
+        # Multi-file fixes legitimately explore for ~4 min; keep this comfortably
+        # above the fix agent's own exploration budget (_MAX_TURNS) so a real run
+        # isn't killed mid-flight and reported as a timeout.
+        sug = asyncio.run(asyncio.wait_for(suggest_fix(verdict, client, s), timeout=420))
+        result = sug.to_dict()
+        # Persist so the suggestion survives a page refresh (it's a ~3-4 min run to
+        # regenerate). Cleared by reset_rca when the RCA is re-run.
+        store.save_fix(key, json.dumps(result))
+        store.finish_job(key, result)
+    except (asyncio.TimeoutError, TimeoutError):
+        store.fail_job(key, "Fix suggestion timed out after 7 minutes.")
+    except Exception as e:  # noqa: BLE001 — surface any failure to the UI
+        traceback.print_exc()
+        store.fail_job(key, f"{type(e).__name__}: {str(e)[:200]}")
+
+
+@app.get("/api/tickets/{key}/job")
+def job_status(key: str):
+    """Poll this for the outcome of a background action (fix / accept_post / reject).
+    Returns {kind, status: running|done|failed, error, result}."""
+    job = store.get_job(key)
+    if job is None:
+        raise HTTPException(404, "Ticket not found")
+    return job
+
+
+@app.post("/api/tickets/{key}/suggest_fix")
+def suggest_fix_endpoint(key: str):
+    """Phase 1 (dry-run): start a background fix suggestion for a completed RCA.
+    Returns immediately; poll GET /job for the diff + rationale + syntax check.
+    Writes NOTHING to GitLab. Human-initiated."""
+    import threading
     ticket = store.get_ticket(key)
     if not ticket or not ticket.get("bot_rca_json"):
         raise HTTPException(400, "No RCA found for this ticket — run RCA first")
-    verdict = json.loads(ticket["bot_rca_json"])
-    s = get_settings()
-    client = _gl()
-    try:
-        # Multi-file fixes legitimately explore for ~4 min; keep this comfortably above
-        # the fix agent's own exploration budget (_MAX_TURNS) so a real run isn't killed
-        # mid-flight and reported as a timeout.
-        sug = await asyncio.wait_for(suggest_fix(verdict, client, s), timeout=420)
-    except asyncio.TimeoutError:
-        raise HTTPException(504, "Fix suggestion timed out")
-    except Exception as e:  # noqa: BLE001 — surface any failure to the UI
-        raise HTTPException(500, f"{type(e).__name__}: {str(e)[:200]}")
-    # Persist so the suggestion survives a page refresh (it's a ~3-4 min run to
-    # regenerate). Cleared by reset_rca when the RCA is re-run.
-    result = sug.to_dict()
-    store.save_fix(key, json.dumps(result))
-    return result
+    if not store.start_job(key, "fix"):
+        return {"status": "already_running"}
+    threading.Thread(target=_suggest_fix_background, args=(key,), daemon=True).start()
+    return {"status": "started"}
 
 
 @app.post("/api/tickets/{key}/raise_mr")
@@ -288,7 +313,8 @@ def reset_rca(key: str):
     """Clear stored RCA (and any fix built on it) so it can be re-run."""
     with store._conn() as con:
         con.execute("UPDATE reviews SET bot_rca_json=NULL, bot_fix_json=NULL, "
-                    "status='pending' WHERE key=?", (key,))
+                    "status='pending', job_kind=NULL, job_status=NULL, "
+                    "job_error=NULL, job_result=NULL WHERE key=?", (key,))
     return {"status": "reset"}
 
 
@@ -312,46 +338,79 @@ def accept(key: str):
     return {"status": "accepted"}
 
 
+def _accept_and_post_background(key: str) -> None:
+    """Post the bot's RCA to Jira and mark accepted, in a thread. A slow Jira call
+    can outlast the reverse proxy's read timeout, so the endpoint returns
+    immediately and the UI polls GET /job for the outcome."""
+    import traceback
+    from ..agent import parse_verdict
+    try:
+        ticket = store.get_ticket(key)
+        jira = _jira()
+        v = parse_verdict(ticket["bot_rca_json"], key)
+        res = jira.post_verdict(key, v)
+        store.mark_accepted(key, res.get("id", ""))
+        store.finish_job(key, {"comment_id": res.get("id")})
+    except Exception as e:  # noqa: BLE001 — surface any failure to the UI
+        traceback.print_exc()
+        store.fail_job(key, f"{type(e).__name__}: {str(e)[:200]}")
+
+
 @app.post("/api/tickets/{key}/accept_and_post")
 def accept_and_post(key: str):
-    """Post the bot's RCA to Jira and mark as accepted."""
+    """Start posting the bot's RCA to Jira; returns immediately. Poll GET /job."""
+    import threading
     ticket = store.get_ticket(key)
     if not ticket or not ticket.get("bot_rca_json"):
         raise HTTPException(400, "No RCA found for this ticket — run RCA first")
     if ticket["status"] in ("accepted", "rejected"):
         raise HTTPException(400, "Already reviewed")
-    jira = _jira()
-    from ..agent import parse_verdict
-    v = parse_verdict(ticket["bot_rca_json"], key)
-    res = jira.post_verdict(key, v)
-    store.mark_accepted(key, res.get("id", ""))
-    return {"status": "accepted", "comment_id": res.get("id")}
+    if not store.start_job(key, "accept_post"):
+        return {"status": "already_running"}
+    threading.Thread(target=_accept_and_post_background, args=(key,), daemon=True).start()
+    return {"status": "started"}
+
+
+def _reject_background(key: str, human_rca: str) -> None:
+    """Post the human's RCA to Jira and mark rejected, in a thread (see
+    _accept_and_post_background for why this is backgrounded)."""
+    import traceback
+    try:
+        jira = _jira()
+        adf = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "paragraph", "content": [
+                    {"type": "text", "text": human_rca}
+                ]},
+                {"type": "paragraph", "content": [
+                    {"type": "text", "text": "(Human RCA — Automated RCA)",
+                     "marks": [{"type": "code"}]}
+                ]},
+            ]
+        }
+        res = jira.add_comment_adf(key, adf)
+        store.mark_rejected(key, human_rca, res.get("id", ""))
+        store.finish_job(key, {"comment_id": res.get("id")})
+    except Exception as e:  # noqa: BLE001 — surface any failure to the UI
+        traceback.print_exc()
+        store.fail_job(key, f"{type(e).__name__}: {str(e)[:200]}")
 
 
 @app.post("/api/tickets/{key}/reject")
 def reject(key: str, body: RejectRequest):
-    """Post the human's RCA to Jira and mark as rejected."""
+    """Start posting the human's RCA to Jira; returns immediately. Poll GET /job."""
+    import threading
     if not body.human_rca.strip():
         raise HTTPException(400, "Human RCA cannot be empty")
     ticket = store.get_ticket(key)
     if ticket and ticket["status"] in ("accepted", "rejected"):
         raise HTTPException(400, "Already reviewed")
-    jira = _jira()
-    adf = {
-        "type": "doc", "version": 1,
-        "content": [
-            {"type": "paragraph", "content": [
-                {"type": "text", "text": body.human_rca}
-            ]},
-            {"type": "paragraph", "content": [
-                {"type": "text", "text": "(Human RCA — Automated RCA)",
-                 "marks": [{"type": "code"}]}
-            ]},
-        ]
-    }
-    res = jira.add_comment_adf(key, adf)
-    store.mark_rejected(key, body.human_rca, res.get("id", ""))
-    return {"status": "rejected", "comment_id": res.get("id")}
+    if not store.start_job(key, "reject"):
+        return {"status": "already_running"}
+    threading.Thread(target=_reject_background, args=(key, body.human_rca),
+                     daemon=True).start()
+    return {"status": "started"}
 
 
 @app.get("/api/scoreboard")
