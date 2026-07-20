@@ -26,6 +26,25 @@ _MAX_RESULTS = 20
 # "... | Mi-Requestid: cdb9b56b-7699-11f1-8be9-67946b4b04b4 | ..."
 _MI_REQ_RE = re.compile(r"Mi-Requestid:\s*([0-9a-fA-F][0-9a-fA-F-]{14,})")
 
+# Our repo/service names do NOT match New Relic's APM appNames, so a naive
+# `appName LIKE '%<repo>%'` matched nothing and search_nr_errors silently returned
+# no production errors on every call. Map the repos we know to their real NR app;
+# unmapped names fall back to a LIKE so nothing regresses.
+#   Other NR apps seen (unmapped): api-router-prod, dsc-service, eway_einvoice_prod,
+#   commonapi-docker, vanilla-refactored, mi-blog-backend.
+_REPO_TO_NR_APP = {
+    "arap-auth-service": "prod-arap",
+    "gst-enterprise-service": "saas-prod",
+    # TODO: background-processes, gst-prefect-app — NR appName not yet confirmed.
+}
+
+
+def _resolve_app(service: str) -> str | None:
+    """A repo/service name (or a 'group/repo' path) -> the real NR appName, or None
+    when we don't have a mapping (caller then falls back to a LIKE match)."""
+    name = (service or "").split("/")[-1].strip().lower()
+    return _REPO_TO_NR_APP.get(name)
+
 
 def _like_safe(s: str) -> str:
     """Strip characters that would break out of an NRQL LIKE '%...%' literal."""
@@ -94,12 +113,19 @@ def search_nr_errors(service: str, hours_ago: int = 2) -> dict:
     Returns error message, stack trace, count, and transaction name.
     Use when the ticket suggests an exception was thrown — this gives you
     the actual production stack trace from New Relic APM.
+
+    Pass the repo/service name (e.g. "arap-auth-service"); it's resolved to the
+    real New Relic appName via `_REPO_TO_NR_APP`, falling back to a substring
+    match for services we haven't mapped yet.
     """
+    app = _resolve_app(service)
+    where = (f"appName = '{app}'" if app
+             else f"appName LIKE '%{_like_safe(service)}%'")
     nrql = (
         f"SELECT appName, transactionName, `error.class`, `error.message`, "
         f"`request.uri`, `request.method`, `response.status`, host, duration "
         f"FROM TransactionError "
-        f"WHERE appName LIKE '%{service}%' "
+        f"WHERE {where} "
         f"SINCE {hours_ago} hours ago "
         f"LIMIT {_MAX_RESULTS}"
     )
