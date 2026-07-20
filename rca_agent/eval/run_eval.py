@@ -75,5 +75,23 @@ def main(argv=None) -> None:
     return ran
 
 
+def rescore_main(argv=None) -> None:
+    """Re-run ONLY the evaluators over existing experiment(s) — no agent re-run.
+    Use after fixing/adding an evaluator. Takes Phoenix experiment IDs (found in the
+    experiment's URL, e.g. .../compare?experimentId=<ID>, or in `run`'s output)."""
+    warn_no_api_key()
+    p = argparse.ArgumentParser(
+        description="Re-score existing experiment(s) with the current evaluators.")
+    p.add_argument("experiment_ids", nargs="+", help="Phoenix experiment IDs")
+    a = p.parse_args(argv)
+    c = client()
+    for eid in a.experiment_ids:
+        exp = c.experiments.get_experiment(experiment_id=eid)
+        print(f"eval: re-scoring experiment {eid} ...")
+        c.experiments.evaluate_experiment(
+            experiment=exp, evaluators=ALL_EVALUATORS, print_summary=True)
+    print(f"\neval: done. Open Phoenix ({base_url()}) to see the updated scores.")
+
+
 if __name__ == "__main__":
     main()

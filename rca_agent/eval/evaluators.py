@@ -2,17 +2,20 @@
 
 PRIMARY (semantic) — `rca_matches`: an LLM judge compares the agent's RCA against
 the curated `reference_rca` and rates it correct / partial / wrong / unknown. This
-is the real score, because an RCA is prose and won't match the reference
-word-for-word. Reuses the production-style judge from score.py.
+is the real score. Reuses the production-style judge from score.py.
 
 SECONDARY (deterministic, only where the ground-truth row carries the tag) —
 `repo_correct`, `cause_bucket_correct`, `regression_correct`: cheap objective
 side-checks. They score None ("n/a") when the corresponding tag is absent.
 
-Phoenix binds evaluator params by NAME: `output` = the task's return value,
-`expected` = the dataset row's output (reference_rca + tags). Each evaluator returns
-{"score": float|None, "label": str, "explanation": str}; score=None means
-"not applicable / couldn't judge".
+Phoenix binds evaluator params by NAME (docs + client source): `output` = the task's
+return value, `expected` = the dataset row's output (reference_rca + tags), plus
+`reference` (alias for expected), `input`, `metadata`.
+
+RETURN SHAPE: each evaluator returns a **tuple `(score, label, explanation)`** —
+score is a float (or None for "not applicable"), label + explanation are strings.
+This is the shape the Phoenix client parses into an EvaluationScore; returning a
+plain dict is silently dropped (recorded as a None score) — that was the earlier bug.
 """
 
 from __future__ import annotations
@@ -36,18 +39,16 @@ def _verdict(output):
     return output.get("verdict") or {}, ""
 
 
-def rca_matches(output, expected) -> dict:
+def rca_matches(output, expected):
     """The core semantic score: does the agent's RCA identify the same root cause
-    as the human-written reference_rca?"""
+    as the human-written reference_rca? Returns (score, label, explanation)."""
     verdict, err = _verdict(output)
     if verdict is None:
-        return {"score": 0.0, "label": "error", "explanation": err[:400]}
+        return (0.0, "error", err[:400])
     reference = (expected or {}).get("reference_rca", "") or ""
-    model = get_settings().model
-    j = asyncio.run(_judge(verdict, reference, model))
+    j = asyncio.run(_judge(verdict, reference, get_settings().model))
     rating = j.get("rating", "unknown")
-    return {"score": _RATING_SCORE.get(rating), "label": rating,
-            "explanation": (j.get("reason", "") or "")[:500]}
+    return (_RATING_SCORE.get(rating), rating, (j.get("reason", "") or "")[:500])
 
 
 # GitLab URL -> repo name, e.g. .../mastersindia/gst-enterprise-service/-/blob/... -> gst-enterprise-service
@@ -63,43 +64,43 @@ def _routed_repo(verdict) -> str | None:
     return None
 
 
-def repo_correct(output, expected) -> dict:
+def repo_correct(output, expected):
     verdict, err = _verdict(output)
     exp = (expected or {}).get("expected_repo")
     if not exp:
-        return {"score": None, "label": "n/a", "explanation": "no expected_repo tag"}
+        return (None, "n/a", "no expected_repo tag")
     if verdict is None:
-        return {"score": 0.0, "label": "error", "explanation": err[:200]}
+        return (0.0, "error", err[:200])
     got = _routed_repo(verdict)
     ok = bool(got) and got.lower() == str(exp).lower()
-    return {"score": 1.0 if ok else 0.0, "label": "match" if ok else "mismatch",
-            "explanation": f"expected {exp}, got {got or 'none'}"}
+    return (1.0 if ok else 0.0, "match" if ok else "mismatch",
+            f"expected {exp}, got {got or 'none'}")
 
 
-def cause_bucket_correct(output, expected) -> dict:
+def cause_bucket_correct(output, expected):
     verdict, err = _verdict(output)
     exp = (expected or {}).get("expected_bucket")
     if not exp:
-        return {"score": None, "label": "n/a", "explanation": "no expected_bucket tag"}
+        return (None, "n/a", "no expected_bucket tag")
     if verdict is None:
-        return {"score": 0.0, "label": "error", "explanation": err[:200]}
+        return (0.0, "error", err[:200])
     got = verdict.get("cause_categories") or []
     ok = exp in got
-    return {"score": 1.0 if ok else 0.0, "label": "match" if ok else "mismatch",
-            "explanation": f"expected {exp} in {got}"}
+    return (1.0 if ok else 0.0, "match" if ok else "mismatch",
+            f"expected {exp} in {got}")
 
 
-def regression_correct(output, expected) -> dict:
+def regression_correct(output, expected):
     verdict, err = _verdict(output)
     exp = (expected or {}).get("is_regression")
     if exp is None:
-        return {"score": None, "label": "n/a", "explanation": "no is_regression tag"}
+        return (None, "n/a", "no is_regression tag")
     if verdict is None:
-        return {"score": 0.0, "label": "error", "explanation": err[:200]}
+        return (0.0, "error", err[:200])
     got = verdict.get("is_regression")
     ok = (got == exp)
-    return {"score": 1.0 if ok else 0.0, "label": "match" if ok else "mismatch",
-            "explanation": f"expected {exp}, got {got}"}
+    return (1.0 if ok else 0.0, "match" if ok else "mismatch",
+            f"expected {exp}, got {got}")
 
 
 ALL_EVALUATORS = [rca_matches, repo_correct, cause_bucket_correct, regression_correct]
