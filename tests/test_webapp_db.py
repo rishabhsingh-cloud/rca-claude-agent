@@ -25,3 +25,60 @@ def test_conn_commits_and_closes(tmp_path, monkeypatch):
     # ...and the first connection is CLOSED — using it now raises (fd released).
     with pytest.raises(sqlite3.ProgrammingError):
         con.execute("SELECT 1")
+
+
+def test_background_job_lifecycle(tmp_path, monkeypatch):
+    # The slow synchronous endpoints (fix / accept_post / reject) now run in a
+    # background thread tracked by these job_* columns, so the POST returns
+    # instantly and the reverse proxy can't time out a long-open request.
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")
+    db.init_db()
+    db.upsert_ticket("AUT-1", "t", "d", "2026-07-20")
+
+    # First claim wins; a second while running is refused (no double-launch).
+    assert db.start_job("AUT-1", "fix") is True
+    assert db.start_job("AUT-1", "fix") is False
+    job = db.get_job("AUT-1")
+    assert job["kind"] == "fix" and job["status"] == "running"
+
+    db.finish_job("AUT-1", {"fixable": True})
+    job = db.get_job("AUT-1")
+    assert job["status"] == "done" and job["result"] == {"fixable": True}
+
+    # A finished job frees the slot for the next action.
+    assert db.start_job("AUT-1", "accept_post") is True
+    db.fail_job("AUT-1", "Jira unreachable")
+    job = db.get_job("AUT-1")
+    assert job["status"] == "failed" and job["error"] == "Jira unreachable"
+
+    assert db.get_job("MISSING") is None
+
+
+def test_running_job_recovered_on_restart(tmp_path, monkeypatch):
+    # A job whose thread died with the process must not stay 'running' forever.
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")
+    db.init_db()
+    db.upsert_ticket("AUT-2", "t", "d", "2026-07-20")
+    db.start_job("AUT-2", "reject")
+
+    db.init_db()  # simulates a service restart
+
+    job = db.get_job("AUT-2")
+    assert job["status"] == "failed" and "restart" in job["error"]
+
+
+def test_reset_clears_job_state(tmp_path, monkeypatch):
+    # Re-running an RCA must wipe any leftover job row so a stale fix/decision
+    # can't reattach to the fresh verdict.
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")
+    db.init_db()
+    db.upsert_ticket("AUT-3", "t", "d", "2026-07-20")
+    db.start_job("AUT-3", "fix")
+    db.finish_job("AUT-3", {"fixable": False})
+
+    with db._conn() as con:
+        con.execute("UPDATE reviews SET job_kind=NULL, job_status=NULL, "
+                    "job_error=NULL, job_result=NULL WHERE key=?", ("AUT-3",))
+
+    assert db.get_job("AUT-3") == {"kind": None, "status": None,
+                                   "error": None, "result": None}

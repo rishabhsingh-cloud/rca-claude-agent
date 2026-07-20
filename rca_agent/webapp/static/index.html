@@ -544,28 +544,64 @@ async function safeJson(r) {
 }
 
 // ---- Fix Suggester (Phase 1, dry-run — nothing is pushed) ----
+// The ticket whose fix panel is currently on screen. pollFix only writes to the
+// DOM while this still matches, so switching tickets mid-run can't paint one
+// ticket's fix into another's panel (the result is always cached + persisted).
+let fixPollKey = null;
+
 async function suggestFix(key) {
   const btn = document.getElementById('fixBtn');
   const out = document.getElementById('fixResult');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Generating fix…';
-  out.innerHTML = '';
+  out.innerHTML = '<p style="color:#5e6c84;font-size:13px;font-style:italic;">'
+    + '⏳ Exploring the code and drafting a fix… this can take a few minutes.</p>';
+  fixPollKey = key;
   try {
+    // Returns immediately ({started|already_running}); the fix runs in the
+    // background so the request can't outlive the proxy's read timeout.
     const r = await fetch(`/api/tickets/${key}/suggest_fix`, {method: 'POST'});
-    const d = await safeJson(r);
-    out.innerHTML = r.ok ? renderFix(d, key)
-      : `<div style="color:#bf2600;font-size:13px;">${escHtml(d.detail || 'Fix generation failed')}</div>`;
-    // Cache on the in-memory ticket so re-selecting it this session keeps the fix;
-    // the server also persisted it, so a full refresh reloads it from the DB too.
-    if (r.ok) {
-      const idx = tickets.findIndex(t => t.key === key);
-      if (idx !== -1) tickets[idx].bot_fix_json = JSON.stringify(d);
-    }
+    if (!r.ok) throw new Error((await safeJson(r)).detail || 'Could not start fix');
+    // 'already_running' just means a fix for this ticket is in flight — poll it.
+    pollFix(key);
   } catch (e) {
     out.innerHTML = `<div style="color:#bf2600;font-size:13px;">${escHtml(String(e))}</div>`;
-  } finally {
     btn.disabled = false;
     btn.textContent = fixBtnLabel();
+  }
+}
+
+async function pollFix(key) {
+  try {
+    const r = await fetch(`/api/tickets/${key}/job`);
+    const j = await r.json();
+    if (j.kind !== 'fix') {
+      // Not a fix job (RCA re-run cleared it, or an accept/reject is running).
+      // Stop and re-enable the button so it isn't stuck on the spinner.
+      const btn = fixPollKey === key ? document.getElementById('fixBtn') : null;
+      if (btn) { btn.disabled = false; btn.textContent = fixBtnLabel(); }
+      return;
+    }
+    if (j.status === 'running') {
+      setTimeout(() => pollFix(key), 4000);
+      return;
+    }
+    // Terminal: cache + persist regardless of which ticket is on screen.
+    const onScreen = fixPollKey === key;
+    const out = onScreen ? document.getElementById('fixResult') : null;
+    const btn = onScreen ? document.getElementById('fixBtn') : null;
+    if (j.status === 'done') {
+      const d = j.result;
+      const idx = tickets.findIndex(t => t.key === key);
+      if (idx !== -1) tickets[idx].bot_fix_json = JSON.stringify(d);
+      if (out) out.innerHTML = renderFix(d, key);
+    } else {  // failed
+      if (out) out.innerHTML =
+        `<div style="color:#bf2600;font-size:13px;">${escHtml(j.error || 'Fix generation failed')}</div>`;
+    }
+    if (btn) { btn.disabled = false; btn.textContent = fixBtnLabel(); }
+  } catch (e) {
+    setTimeout(() => pollFix(key), 4000);      // transient network blip — keep polling
   }
 }
 
@@ -811,17 +847,49 @@ async function acceptRca() {
   }
 }
 
+// Poll a backgrounded accept/reject job to completion, then apply the UI change.
+// `kind` is the job we started, so we don't latch onto a different in-flight job.
+// onDone() updates the in-memory ticket for the final status.
+async function pollDecision(key, kind, successMsg, onDone) {
+  try {
+    const r = await fetch(`/api/tickets/${key}/job`);
+    const j = await r.json();
+    if (j.kind === kind && j.status === 'running') {
+      setTimeout(() => pollDecision(key, kind, successMsg, onDone), 3000);
+      return;
+    }
+    if (j.kind === kind && j.status === 'done') {
+      onDone();
+      showToast(successMsg);
+      if (currentKey === key) selectTicket(key);
+      renderTicketList();
+      loadScoreboard();
+    } else {  // failed, or superseded by another job
+      showToast('Error: ' + (j.error || 'posting to Jira failed'), true);
+      setActionBtns(false);
+    }
+  } catch(e) {
+    setTimeout(() => pollDecision(key, kind, successMsg, onDone), 3000);
+  }
+}
+
 async function acceptAndPostRca() {
   setActionBtns(true);
+  showToast('Posting to Jira…');
+  const key = currentKey;
   try {
-    const res = await fetch(`/api/tickets/${currentKey}/accept_and_post`, {method:'POST'});
-    if (!res.ok) throw new Error(await res.text());
-    const idx = tickets.findIndex(t => t.key === currentKey);
-    if (idx !== -1) tickets[idx].status = 'accepted';
-    showToast('✓ RCA posted to Jira');
-    selectTicket(currentKey);
-    renderTicketList();
-    loadScoreboard();
+    const res = await fetch(`/api/tickets/${key}/accept_and_post`, {method:'POST'});
+    const d = await safeJson(res);
+    if (!res.ok) throw new Error(d.detail || 'Could not start posting');
+    if (d.status === 'already_running') {
+      showToast('Another action for this ticket is still running — wait for it.', true);
+      setActionBtns(false);
+      return;
+    }
+    pollDecision(key, 'accept_post', '✓ RCA posted to Jira', () => {
+      const idx = tickets.findIndex(t => t.key === key);
+      if (idx !== -1) tickets[idx].status = 'accepted';
+    });
   } catch(e) {
     showToast('Error: ' + e.message, true);
     setActionBtns(false);
@@ -836,21 +904,29 @@ function showHumanRca() {
 async function postHumanRca() {
   const text = document.getElementById('humanRcaText').value.trim();
   if (!text) { showToast('Please write your RCA first', true); return; }
+  const key = currentKey;
+  setActionBtns(true);
+  showToast('Posting to Jira…');
   try {
-    const res = await fetch(`/api/tickets/${currentKey}/reject`, {
+    const res = await fetch(`/api/tickets/${key}/reject`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({human_rca: text})
     });
-    if (!res.ok) throw new Error(await res.text());
-    const idx = tickets.findIndex(t => t.key === currentKey);
-    if (idx !== -1) { tickets[idx].status = 'rejected'; tickets[idx].human_rca = text; }
-    showToast('Human RCA posted to Jira');
-    selectTicket(currentKey);
-    renderTicketList();
-    loadScoreboard();
+    const d = await safeJson(res);
+    if (!res.ok) throw new Error(d.detail || 'Could not start posting');
+    if (d.status === 'already_running') {
+      showToast('Another action for this ticket is still running — wait for it.', true);
+      setActionBtns(false);
+      return;
+    }
+    pollDecision(key, 'reject', 'Human RCA posted to Jira', () => {
+      const idx = tickets.findIndex(t => t.key === key);
+      if (idx !== -1) { tickets[idx].status = 'rejected'; tickets[idx].human_rca = text; }
+    });
   } catch(e) {
     showToast('Error: ' + e.message, true);
+    setActionBtns(false);
   }
 }
 

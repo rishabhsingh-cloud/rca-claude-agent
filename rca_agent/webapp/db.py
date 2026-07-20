@@ -46,7 +46,16 @@ def init_db() -> None:
             )
         """)
         # migrate existing DBs that don't have these columns yet
-        for col in ("turns_used INTEGER", "error TEXT", "bot_fix_json TEXT"):
+        for col in ("turns_used INTEGER", "error TEXT", "bot_fix_json TEXT",
+                    # Generic background-job tracking for the slow synchronous
+                    # actions (fix suggestion, accept+post, reject). These let the
+                    # POST return instantly and the UI poll for completion, so a
+                    # 3-4 min run never sits on an open connection the reverse
+                    # proxy will time out. job_kind: which action is in flight;
+                    # job_status: running|done|failed; job_result: JSON payload
+                    # the poller renders (e.g. the fix dict or {comment_id}).
+                    "job_kind TEXT", "job_status TEXT", "job_error TEXT",
+                    "job_result TEXT"):
             try:
                 con.execute(f"ALTER TABLE reviews ADD COLUMN {col}")
             except sqlite3.OperationalError:
@@ -57,6 +66,10 @@ def init_db() -> None:
         con.execute("UPDATE reviews SET status = 'failed', "
                     "error = 'Interrupted by a server restart — please retry.' "
                     "WHERE status = 'running'")
+        # Same for a background action-job whose thread died with the process.
+        con.execute("UPDATE reviews SET job_status = 'failed', "
+                    "job_error = 'Interrupted by a server restart — please retry.' "
+                    "WHERE job_status = 'running'")
 
 
 def upsert_ticket(key: str, title: str, description: str, created_at: str) -> None:
@@ -117,6 +130,50 @@ def clear_fix(key: str) -> None:
     with _conn() as con:
         con.execute("UPDATE reviews SET bot_fix_json = NULL, updated_at = datetime('now') "
                     "WHERE key = ?", (key,))
+
+
+# --- Generic background-job state (fix suggestion / accept+post / reject) -----
+
+def start_job(key: str, kind: str) -> bool:
+    """Claim the job slot for `key` and mark it running. Returns False if a job is
+    already running for this ticket (so a double-click can't launch two threads)."""
+    with _conn() as con:
+        cur = con.execute(
+            "UPDATE reviews SET job_kind = ?, job_status = 'running', "
+            "job_error = NULL, job_result = NULL, updated_at = datetime('now') "
+            "WHERE key = ? AND (job_status IS NULL OR job_status != 'running')",
+            (kind, key))
+        return cur.rowcount > 0
+
+
+def finish_job(key: str, result: dict | list | None = None) -> None:
+    """Mark the in-flight job done, storing an optional JSON result for the poller."""
+    with _conn() as con:
+        con.execute(
+            "UPDATE reviews SET job_status = 'done', job_result = ?, "
+            "updated_at = datetime('now') WHERE key = ?",
+            (json.dumps(result) if result is not None else None, key))
+
+
+def fail_job(key: str, error: str) -> None:
+    """Mark the in-flight job failed with a human-readable reason for the poller."""
+    with _conn() as con:
+        con.execute(
+            "UPDATE reviews SET job_status = 'failed', job_error = ?, "
+            "updated_at = datetime('now') WHERE key = ?", (error, key))
+
+
+def get_job(key: str) -> dict | None:
+    """Current background-job state for a ticket (None if the ticket is unknown)."""
+    t = get_ticket(key)
+    if t is None:
+        return None
+    return {
+        "kind": t.get("job_kind"),
+        "status": t.get("job_status"),
+        "error": t.get("job_error"),
+        "result": json.loads(t["job_result"]) if t.get("job_result") else None,
+    }
 
 
 def mark_running(key: str) -> None:
