@@ -34,10 +34,20 @@ class AgentRunError(RuntimeError):
     limit, overload, no output) — distinct from a low-confidence verdict."""
 
 
+# Built-in Claude Code tools the RCA agent must never use. `Task` (subagents) made
+# runs end on prose ABOUT a subagent instead of the JSON verdict — and burned the
+# time budget — while `Write`/`Edit` have no place in a read-only investigator.
+# Applied to every RCA run by default. `Bash`/`Read` are intentionally NOT blocked
+# yet: the agent still leans on them to page through large tool output. Revisit once
+# get_repo_summary is trimmed and the eval harness confirms no regression.
+DEFAULT_DISALLOWED_TOOLS = ["Task", "Write", "Edit"]
+
+
 async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClient,
                     settings: Settings, jira_mcp: bool = False,
                     max_turns: int = 60,
-                    images: list[dict] | None = None) -> tuple[str, int, set[str]]:
+                    images: list[dict] | None = None,
+                    disallowed_tools: list[str] | None = None) -> tuple[str, int, set[str]]:
     """Run one investigation through the agent loop; return
     (final_text, turns_used, tools_used) — tools_used is the set of tool names the
     agent actually invoked (e.g. "mcp__rca__git_blame"), used by post-hoc guards.
@@ -63,6 +73,10 @@ async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClie
         system_prompt=build_system_prompt(settings.gitlab_url),
         mcp_servers=mcp_servers,
         allowed_tools=allowed,      # read-only tools, pre-approved -> no prompts
+        # Block the dangerous/derailing built-ins (Task/Write/Edit by default).
+        # `None` -> the default block-list; pass an explicit list (incl. []) to override.
+        disallowed_tools=(DEFAULT_DISALLOWED_TOOLS if disallowed_tools is None
+                          else disallowed_tools),
         model=settings.model,
         permission_mode="default",
         # Real cross-service investigations fan out across many tools; 20 was too
