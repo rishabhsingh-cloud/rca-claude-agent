@@ -4,6 +4,7 @@
            -> data/ground_truth.draft.jsonl  (you curate -> data/ground_truth.jsonl)
   upload   Push data/ground_truth.jsonl to Phoenix as a Dataset
   run      Run the real RCA agent as a Phoenix EXPERIMENT + score it
+  rescore  Re-run ONLY the evaluators over existing experiment(s) — no agent re-run
 
 Typical flow:
   python -m rca_agent.eval seed --limit 15     # optional: draft from Jira
@@ -23,7 +24,7 @@ from . import dataset, run_eval
 
 
 def main() -> None:
-    if len(sys.argv) < 2 or sys.argv[1] not in ("seed", "upload", "run"):
+    if len(sys.argv) < 2 or sys.argv[1] not in ("seed", "upload", "run", "rescore"):
         sys.exit(__doc__)
     cmd, rest = sys.argv[1], sys.argv[2:]
     if cmd == "seed":
@@ -32,6 +33,8 @@ def main() -> None:
         dataset.upload_main(rest)
     elif cmd == "run":
         run_eval.main(rest)
+    elif cmd == "rescore":
+        run_eval.rescore_main(rest)
 
 
 if __name__ == "__main__":
