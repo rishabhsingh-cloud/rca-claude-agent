@@ -34,4 +34,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["rca_agent", "rca_agent.webapp", "rca_agent.eval"]
+packages = ["rca_agent", "rca_agent.webapp", "rca_agent.eval", "rca_agent.profiles"]
+
+[tool.setuptools.package-data]
+"rca_agent.profiles" = ["*.md"]

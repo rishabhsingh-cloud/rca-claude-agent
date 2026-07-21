@@ -36,8 +36,13 @@ def _repo_path(project: str) -> Path | None:
     return p if p.is_dir() else None
 
 
-def search_code_local(project: str, query: str) -> dict:
+def search_code_local(project: str, query: str, scope: str | None = None) -> dict:
     """Ripgrep search over a cloned repo. Returns file:line matches.
+
+    `scope` (a path prefix like "masters_india_saas/reconcile") restricts the search to
+    that subtree when it exists in the repo — used by module profiles to stay inside one
+    module (fewer wrong-file distractions, faster). If the scope path isn't present in
+    this repo, the whole repo is searched and `scope_applied` comes back False.
 
     Falls back to {"error": "not available"} if REPOS_DIR not set or
     repo not cloned — caller should fall back to GitLab API search.
@@ -46,10 +51,16 @@ def search_code_local(project: str, query: str) -> dict:
     if not repo:
         return {"error": "local search not available — REPOS_DIR not set or repo not cloned"}
 
+    target, scope_applied = repo, False
+    if scope:
+        candidate = repo / scope
+        if candidate.is_dir():
+            target, scope_applied = candidate, True
+
     try:
         result = subprocess.run(
             ["rg", "--line-number", "--no-heading", "--max-count=3",
-             "--max-filesize=1M", "-e", query, str(repo)],
+             "--max-filesize=1M", "-e", query, str(target)],
             capture_output=True, text=True, timeout=_TIMEOUT,
         )
     except FileNotFoundError:
@@ -76,4 +87,5 @@ def search_code_local(project: str, query: str) -> dict:
         if len(matches) >= _MAX_MATCHES:
             break
 
-    return {"project": project, "query": query, "matches": matches}
+    return {"project": project, "query": query, "scope": scope,
+            "scope_applied": scope_applied, "matches": matches}

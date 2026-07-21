@@ -48,7 +48,7 @@ def _err(msg: str) -> dict:
             "is_error": True}
 
 
-def build_rca_server(client: GitLabClient):
+def build_rca_server(client: GitLabClient, search_scope: str | None = None):
     """Create the SDK MCP server exposing the RCA tools, bound to `client`.
 
     Returns (server, tool_names) where tool_names are the fully-qualified
@@ -184,7 +184,7 @@ def build_rca_server(client: GitLabClient):
           "Falls back to 'not available' if repos are not cloned (then use search_code).",
           {"project": str, "query": str})
     async def search_code_local(args):
-        result = _search_code_local(args["project"], args["query"])
+        result = _search_code_local(args["project"], args["query"], scope=search_scope)
         if "error" in result:
             return _err(result["error"])
         return _ok(result)

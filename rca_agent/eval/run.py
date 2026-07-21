@@ -32,7 +32,8 @@ def _fetch(jira: JiraClient, key: str) -> tuple[str, list | None]:
     return text, (att.get("images") or None)
 
 
-async def _one(row: dict, jira: JiraClient, gl, settings, max_turns: int) -> dict:
+async def _one(row: dict, jira: JiraClient, gl, settings, max_turns: int,
+               profile=None) -> dict:
     key = row["key"]
     try:
         text, images = await asyncio.to_thread(_fetch, jira, key)
@@ -40,7 +41,8 @@ async def _one(row: dict, jira: JiraClient, gl, settings, max_turns: int) -> dic
         return {"key": key, "error": f"fetch: {type(e).__name__}: {e}"}
     try:
         raw, turns, _tools = await run_agent(key, text, gl, settings,
-                                             jira_mcp=False, max_turns=max_turns, images=images)
+                                             jira_mcp=False, max_turns=max_turns,
+                                             images=images, profile=profile)
     except AgentRunError as e:
         return {"key": key, "error": f"agent: {e}"}
     except Exception as e:  # noqa: BLE001

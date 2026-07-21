@@ -25,6 +25,7 @@ import subprocess
 from ._common import warn_no_api_key
 from .dataset import DEFAULT_DATASET
 from .evaluators import ALL_EVALUATORS
+from ..profiles import get_profile
 from .phoenix_client import base_url, client
 from .task import run_rca_task
 
@@ -47,7 +48,14 @@ def main(argv=None) -> None:
                    help="per-run ceiling in seconds (RCA runs are ~10 min)")
     p.add_argument("--dry-run", action="store_true",
                    help="run tasks + evals but do NOT record to Phoenix")
+    p.add_argument("--profile", default="",
+                   help="agent profile to use, e.g. 'reco' (default: the general agent)")
     a = p.parse_args(argv)
+
+    if a.profile and get_profile(a.profile) is None:
+        raise SystemExit(f"eval: unknown profile '{a.profile}' (known: reco).")
+    if a.profile:
+        os.environ["EVAL_PROFILE"] = a.profile
 
     # Eval runs emit their OWN traces into a separate project so live prod traces
     # (the rca-agent project) stay uncluttered. No-op if tracing isn't installed.
@@ -59,13 +67,14 @@ def main(argv=None) -> None:
     label = a.experiment or _git_sha()
 
     print(f"eval: running experiment '{label}' over dataset '{a.name}' "
-          f"(dry_run={a.dry_run}). Each ticket takes minutes — be patient.")
+          f"(profile={a.profile or 'none'}, dry_run={a.dry_run}). "
+          f"Each ticket takes minutes — be patient.")
     ran = c.experiments.run_experiment(
         dataset=ds,
         task=run_rca_task,
         evaluators=ALL_EVALUATORS,
         experiment_name=label,
-        experiment_metadata={"git_sha": _git_sha()},
+        experiment_metadata={"git_sha": _git_sha(), "profile": a.profile or None},
         timeout=a.timeout,
         dry_run=a.dry_run,
         print_summary=True,

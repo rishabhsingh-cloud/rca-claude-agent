@@ -20,6 +20,7 @@ import threading
 from ..config import get_settings
 from ..gitlab_client import build_client
 from ..jira import JiraClient
+from ..profiles import get_profile
 from .run import _one  # production-faithful single-ticket run, reused verbatim
 
 _MAX_TURNS = int(os.getenv("EVAL_MAX_TURNS", "60"))
@@ -61,5 +62,6 @@ def run_rca_task(example) -> dict:
     crash that aborts the whole experiment."""
     key = _ticket_key(example)
     settings, jira, gl = _clients()
+    profile = get_profile(os.getenv("EVAL_PROFILE"))  # set by run_eval's --profile flag
     with _sem:
-        return asyncio.run(_one({"key": key}, jira, gl, settings, _MAX_TURNS))
+        return asyncio.run(_one({"key": key}, jira, gl, settings, _MAX_TURNS, profile=profile))

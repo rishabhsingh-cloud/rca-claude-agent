@@ -24,6 +24,7 @@ from . import trace as _trace
 from .config import Settings
 from .gitlab_client import GitLabClient
 from .jira import atlassian_allowed_tools, atlassian_mcp_server_config
+from .profiles import AgentProfile, build_profile_system_prompt
 from .prompts import build_system_prompt
 from .schema import CauseCategory, Confidence, EvidenceLink, Triage, Verdict
 from .tools import build_rca_server
@@ -47,7 +48,8 @@ async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClie
                     settings: Settings, jira_mcp: bool = False,
                     max_turns: int = 60,
                     images: list[dict] | None = None,
-                    disallowed_tools: list[str] | None = None) -> tuple[str, int, set[str]]:
+                    disallowed_tools: list[str] | None = None,
+                    profile: AgentProfile | None = None) -> tuple[str, int, set[str]]:
     """Run one investigation through the agent loop; return
     (final_text, turns_used, tools_used) — tools_used is the set of tool names the
     agent actually invoked (e.g. "mcp__rca__git_blame"), used by post-hoc guards.
@@ -62,15 +64,21 @@ async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClie
         the hosted server will NOT complete OAuth headlessly on its own.
     """
     _trace.setup_tracing()  # no-op unless RCA_TRACE=1 + Phoenix configured
-    server, tool_names = build_rca_server(client)
+    server, tool_names = build_rca_server(
+        client, search_scope=(profile.search_scope if profile else None))
     mcp_servers = {"rca": server}
-    allowed = list(tool_names)
+    # A profile may restrict the tool set; default is the full read-only set.
+    allowed = (list(profile.allowed_tools) if (profile and profile.allowed_tools)
+               else list(tool_names))
     if jira_mcp:
         mcp_servers["atlassian"] = atlassian_mcp_server_config()
         allowed += atlassian_allowed_tools("atlassian")
 
     options = ClaudeAgentOptions(
-        system_prompt=build_system_prompt(settings.gitlab_url),
+        # Reco (or any profile) gets its OWN system prompt, composed in profiles/ from
+        # the unmodified general prompt. profile=None -> the general prompt, unchanged.
+        system_prompt=(build_profile_system_prompt(profile, settings.gitlab_url)
+                       if profile else build_system_prompt(settings.gitlab_url)),
         mcp_servers=mcp_servers,
         allowed_tools=allowed,      # read-only tools, pre-approved -> no prompts
         # Block the dangerous/derailing built-ins (Task/Write/Edit by default).
@@ -88,6 +96,12 @@ async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClie
                  if ticket_text else
                  f"Investigate Jira ticket {ticket_key}. Fetch it with "
                  f"mcp__atlassian__getJiraIssue first, then analyze.")
+
+    # A profile can front-load a module summary so the agent always orients on it
+    # (no dependence on it choosing to call get_repo_summary).
+    if profile and profile.summary:
+        text_part = (f"# {profile.name.upper()} MODULE REFERENCE (read this first)\n\n"
+                     f"{profile.summary}\n\n---\n\n{text_part}")
 
     if images:
         img_note = (f"\n\nThe ticket also has {len(images)} screenshot(s) attached. "
