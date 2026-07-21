@@ -34,8 +34,14 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     steps:
-      - name: Pull latest code
-        run: git -C /home/rishabh/rca-claude-agent pull
+      - name: Sync to origin/main
+        # Deterministic sync, not `git pull`: the box is a deploy target that mirrors
+        # origin/main, and a plain pull fails (exit 1) whenever the working tree has any
+        # local modification — which is what has been flaking the deploy. fetch+reset
+        # always fast-forwards; untracked files (e.g. local *.csv) are preserved.
+        run: |
+          git -C /home/rishabh/rca-claude-agent fetch --prune origin
+          git -C /home/rishabh/rca-claude-agent reset --hard origin/main
 
       - name: Install / upgrade package
         run: /home/rishabh/rca-claude-agent/.venv/bin/pip install -e ".[live,webapp,appdb,trace]"

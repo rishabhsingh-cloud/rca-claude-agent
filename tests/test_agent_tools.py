@@ -19,7 +19,8 @@ def _run_and_capture(monkeypatch, disallowed_arg):
     """Invoke run_agent with the SDK stubbed out; return the disallowed_tools that
     reached ClaudeAgentOptions."""
     captured: dict = {}
-    monkeypatch.setattr(agent, "build_rca_server", lambda client: (object(), []))
+    monkeypatch.setattr(agent, "build_rca_server",
+                        lambda client, search_scope=None: (object(), []))
     monkeypatch.setattr(agent._trace, "setup_tracing", lambda: None)
     monkeypatch.setattr(agent, "build_system_prompt", lambda url: "sys")
 
