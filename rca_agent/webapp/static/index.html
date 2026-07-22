@@ -427,12 +427,14 @@ async function selectTicket(key) {
       </button>
     </div>
 
-    <div class="human-rca-box" id="humanRcaBox">
+    <div class="human-rca-box show" id="humanRcaBox">
       <div class="card" style="margin:0;">
-        <h3>Your RCA</h3>
-        <textarea id="humanRcaText" placeholder="Describe the root cause in your own words..."></textarea>
-        <div style="margin-top:10px;">
+        <h3>Your RCA <span style="font-weight:400;font-size:13px;color:#6b778c;">(optional — save a draft now, post to Jira when ready)</span></h3>
+        <textarea id="humanRcaText" placeholder="Describe the root cause in your own words…">${ticket.human_rca_draft ? escHtml(ticket.human_rca_draft) : ''}</textarea>
+        <div style="margin-top:10px;display:flex;gap:8px;align-items:center;">
+          <button id="saveDraftBtn" onclick="saveHumanRca()" style="background:#5243aa;color:#fff;border:none;border-radius:4px;padding:8px 16px;font-size:14px;font-weight:600;cursor:pointer;">Save draft</button>
           <button class="post-human-btn" onclick="postHumanRca()">Post Human RCA to Jira</button>
+          <span id="draftHint" style="font-size:12px;color:#6b778c;">${ticket.human_rca_draft ? 'Draft saved — not yet posted' : ''}</span>
         </div>
       </div>
     </div>
@@ -927,6 +929,31 @@ async function postHumanRca() {
   } catch(e) {
     showToast('Error: ' + e.message, true);
     setActionBtns(false);
+  }
+}
+
+async function saveHumanRca() {
+  const text = document.getElementById('humanRcaText').value;
+  const key = currentKey;
+  const btn = document.getElementById('saveDraftBtn');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(`/api/tickets/${key}/save_human_rca`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text})
+    });
+    const d = await safeJson(res);
+    if (!res.ok) throw new Error(d.detail || 'Could not save draft');
+    const idx = tickets.findIndex(t => t.key === key);
+    if (idx !== -1) tickets[idx].human_rca_draft = text;
+    const hint = document.getElementById('draftHint');
+    if (hint) hint.textContent = text.trim() ? 'Draft saved — not yet posted' : 'Draft cleared';
+    showToast('Draft saved (not posted to Jira)');
+  } catch(e) {
+    showToast('Error: ' + e.message, true);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 

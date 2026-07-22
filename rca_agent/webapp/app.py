@@ -215,6 +215,9 @@ def rca_status(key: str):
         result["turns_used"] = ticket.get("turns_used")
     elif ticket["status"] == "failed":
         result["error"] = ticket.get("error")
+    # Always surface any saved (unposted) human RCA draft so the UI can restore it.
+    if ticket.get("human_rca_draft"):
+        result["human_rca_draft"] = ticket["human_rca_draft"]
     return result
 
 
@@ -337,6 +340,24 @@ class RejectRequest(BaseModel):
     human_rca: str
 
 
+class SaveHumanRcaRequest(BaseModel):
+    text: str
+
+
+@app.post("/api/tickets/{key}/save_human_rca")
+def save_human_rca(key: str, body: SaveHumanRcaRequest):
+    """Save a human-written RCA locally WITHOUT posting to Jira (QA drafts now, posts
+    later). Standalone — works whether or not the bot produced an RCA, and does not
+    change the ticket status. Re-save to update; posting happens via /reject."""
+    ticket = store.get_ticket(key)
+    if not ticket:
+        raise HTTPException(404, "Ticket not found")
+    if ticket["status"] in ("accepted", "rejected"):
+        raise HTTPException(400, "Already reviewed — nothing to draft")
+    store.save_human_rca_draft(key, body.text)
+    return {"status": "saved"}
+
+
 @app.post("/api/tickets/{key}/accept")
 def accept(key: str):
     """Mark as accepted locally without posting to Jira."""
@@ -402,6 +423,7 @@ def _reject_background(key: str, human_rca: str) -> None:
         }
         res = jira.add_comment_adf(key, adf)
         store.mark_rejected(key, human_rca, res.get("id", ""))
+        store.clear_human_rca_draft(key)  # posted now — drop the local draft
         store.finish_job(key, {"comment_id": res.get("id")})
     except Exception as e:  # noqa: BLE001 — surface any failure to the UI
         traceback.print_exc()

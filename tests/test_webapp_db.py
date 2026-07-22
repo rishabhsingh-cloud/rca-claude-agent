@@ -102,6 +102,25 @@ def test_mark_failed_never_clobbers_existing_verdict(tmp_path, monkeypatch):
     assert not t["status"] == "running"               # and not left wedged at running
 
 
+def test_human_rca_draft_saves_without_posting(tmp_path, monkeypatch):
+    # QA ask: write your own RCA and SAVE it locally, without posting to Jira or
+    # touching the ticket status. Standalone — works with no bot RCA present.
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")
+    db.init_db()
+    db.upsert_ticket("AUT-1", "t", "d", "2026-07-22")
+
+    db.save_human_rca_draft("AUT-1", "my root cause")
+    t = db.get_ticket("AUT-1")
+    assert t["human_rca_draft"] == "my root cause"
+    assert t["status"] == "pending"            # no status change, no posting
+
+    db.save_human_rca_draft("AUT-1", "revised")  # re-save updates in place
+    assert db.get_ticket("AUT-1")["human_rca_draft"] == "revised"
+
+    db.clear_human_rca_draft("AUT-1")            # cleared once posted
+    assert db.get_ticket("AUT-1")["human_rca_draft"] is None
+
+
 def test_mark_failed_records_failure_when_no_verdict(tmp_path, monkeypatch):
     # A genuine failure with nothing to fall back to still records 'failed'.
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")

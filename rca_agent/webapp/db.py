@@ -55,7 +55,11 @@ def init_db() -> None:
                     # job_status: running|done|failed; job_result: JSON payload
                     # the poller renders (e.g. the fix dict or {comment_id}).
                     "job_kind TEXT", "job_status TEXT", "job_error TEXT",
-                    "job_result TEXT"):
+                    "job_result TEXT",
+                    # A human-written RCA saved locally but NOT yet posted to Jira
+                    # (QA can draft now, post later). Independent of bot_rca_json /
+                    # status; cleared once the human RCA is actually posted.
+                    "human_rca_draft TEXT"):
             try:
                 con.execute(f"ALTER TABLE reviews ADD COLUMN {col}")
             except sqlite3.OperationalError:
@@ -129,6 +133,21 @@ def clear_fix(key: str) -> None:
     """Discard a stored fix suggestion (the reviewer rejected it). Local only."""
     with _conn() as con:
         con.execute("UPDATE reviews SET bot_fix_json = NULL, updated_at = datetime('now') "
+                    "WHERE key = ?", (key,))
+
+
+def save_human_rca_draft(key: str, text: str) -> None:
+    """Persist a human-written RCA WITHOUT posting it to Jira, so QA can draft now and
+    post later. Local only — never touches Jira or the ticket status."""
+    with _conn() as con:
+        con.execute("UPDATE reviews SET human_rca_draft = ?, updated_at = datetime('now') "
+                    "WHERE key = ?", (text, key))
+
+
+def clear_human_rca_draft(key: str) -> None:
+    """Drop a saved human-RCA draft (e.g. once it's been posted)."""
+    with _conn() as con:
+        con.execute("UPDATE reviews SET human_rca_draft = NULL, updated_at = datetime('now') "
                     "WHERE key = ?", (key,))
 
 
