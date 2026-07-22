@@ -52,3 +52,39 @@ def test_run_agent_allows_explicit_override(monkeypatch):
     # An explicit list (including []) overrides the default, so callers stay in control.
     assert _run_and_capture(monkeypatch, []) == []
     assert _run_and_capture(monkeypatch, ["Task"]) == ["Task"]
+
+
+def test_run_agent_soft_budget_keeps_finished_verdict(monkeypatch):
+    # AUT-9864 fix (Option A): a soft time budget must STOP consuming further turns
+    # and RETURN the verdict already produced — not discard it the way an external
+    # wait_for cancel did. Here the verdict arrives on turn 1; the budget then trips,
+    # and the later prose turns (which would overwrite final_text) must never run.
+    from claude_agent_sdk import AssistantMessage, TextBlock
+
+    monkeypatch.setattr(agent, "build_rca_server",
+                        lambda client, search_scope=None: (object(), []))
+    monkeypatch.setattr(agent._trace, "setup_tracing", lambda: None)
+    monkeypatch.setattr(agent, "build_system_prompt", lambda url: "sys")
+
+    verdict = '{"triage": "real_bug", "confidence": "high", "probable_root_cause": "x"}'
+
+    async def fake_query(prompt, options):
+        # Real time passes before the verdict turn lands, so the budget is already
+        # exceeded when the loop checks it right after processing this turn.
+        await asyncio.sleep(0.05)
+        yield AssistantMessage(content=[TextBlock(text=verdict)], model="m")
+        # Later turns that WOULD overwrite final_text — must never be consumed.
+        yield AssistantMessage(content=[TextBlock(text="still investigating...")], model="m")
+        yield AssistantMessage(content=[TextBlock(text="more prose, not a verdict")], model="m")
+
+    monkeypatch.setattr(agent.claude_agent_sdk, "query", fake_query)
+
+    class _S:
+        gitlab_url = "http://gl"
+        model = "claude-opus-4-8"
+
+    text, turns, _tools = asyncio.run(
+        agent.run_agent("AUT-1", "text", client=object(), settings=_S(),
+                        time_budget_s=0.01))
+    assert text == verdict   # the finished verdict is kept...
+    assert turns == 1        # ...and no further turn was consumed past the budget

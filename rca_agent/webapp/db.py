@@ -185,11 +185,27 @@ def mark_running(key: str) -> None:
 
 
 def mark_failed(key: str, error: str | None = None) -> None:
+    """Record a failed/timed-out run — but NEVER regress a ticket that already holds
+    a verdict. A re-run that fails must not wipe the previously-good result (the
+    AUT-9864 clobber): `mark_running` only flips the status to 'running' and leaves
+    `bot_rca_json` intact, so we key the guard on the verdict itself, not the status.
+
+      - no verdict yet (bot_rca_json IS NULL) -> mark 'failed' (genuine failure).
+      - a verdict exists                        -> keep it; restore 'rca_ready' so the
+        row isn't left stuck at 'running', and stash the reason in `error` as a
+        breadcrumb (the /status endpoint only surfaces `error` for failed rows).
+    """
     with _conn() as con:
-        con.execute("""
+        cur = con.execute("""
             UPDATE reviews SET status = 'failed', error = ?,
-            updated_at = datetime('now') WHERE key = ?
+            updated_at = datetime('now') WHERE key = ? AND bot_rca_json IS NULL
         """, (error, key))
+        if cur.rowcount == 0:
+            con.execute("""
+                UPDATE reviews SET status = 'rca_ready', error = ?,
+                updated_at = datetime('now')
+                WHERE key = ? AND bot_rca_json IS NOT NULL
+            """, (f"[last re-run did not finish: {error}]" if error else None, key))
 
 
 def mark_accepted(key: str, comment_id: str) -> None:

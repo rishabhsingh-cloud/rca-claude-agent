@@ -10,6 +10,7 @@ Requires `claude-agent-sdk` and ANTHROPIC_API_KEY in the environment.
 from __future__ import annotations
 
 import json
+import time
 
 import claude_agent_sdk
 from claude_agent_sdk import (
@@ -49,10 +50,20 @@ async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClie
                     max_turns: int = 60,
                     images: list[dict] | None = None,
                     disallowed_tools: list[str] | None = None,
-                    profile: AgentProfile | None = None) -> tuple[str, int, set[str]]:
+                    profile: AgentProfile | None = None,
+                    time_budget_s: float | None = None) -> tuple[str, int, set[str]]:
     """Run one investigation through the agent loop; return
     (final_text, turns_used, tools_used) — tools_used is the set of tool names the
     agent actually invoked (e.g. "mcp__rca__git_blame"), used by post-hoc guards.
+
+    `time_budget_s` is a SOFT wall-clock budget the loop self-enforces: once it is
+    exceeded, we stop consuming further turns and fall through to the normal
+    verdict-parse/return path, KEEPING whatever the agent has produced. This is
+    deliberately not an external `asyncio.wait_for` cancel — a cancel tears the run
+    down mid-await and discards a verdict that was about to be returned (the cause of
+    the "Phoenix has a verdict but the dashboard says failed" bug). The caller should
+    still wrap the run in a *generous* hard ceiling to catch a genuinely wedged await;
+    that ceiling is a last resort, not the normal stopping mechanism.
 
     Jira integration (two modes):
       - FETCH-THEN-PASS (default, recommended): the orchestrator fetches the
@@ -137,6 +148,8 @@ async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClie
     final_text = ""
     turns_used = 0
     tools_used: set[str] = set()
+    budget_hit = False
+    start = time.monotonic()
     try:
         # Call through the module (not a `from … import query` binding) so the
         # Phoenix auto-instrumentor's wrapper — installed on claude_agent_sdk.query
@@ -160,6 +173,13 @@ async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClie
                     raise AgentRunError(f"agent run failed ({subtype}): {result[:200]}")
                 if result:
                     final_text = result
+            # SOFT time budget: checked at each turn boundary, AFTER the current
+            # message is fully processed — so a verdict that just arrived is kept.
+            # We stop consuming further turns and fall through to the verdict parse
+            # below; we never cancel mid-await (that would discard a finished run).
+            if time_budget_s is not None and (time.monotonic() - start) > time_budget_s:
+                budget_hit = True
+                break
     except AgentRunError:
         raise  # infra failure always propagates
     except Exception:
@@ -170,8 +190,10 @@ async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClie
     # with stray braces from set notation), an error string, or a cut-off
     # mid-compose all fail here — raise loudly instead of faking an LOW verdict.
     if not _looks_like_verdict(final_text):
+        why = ("hit the time budget mid-compose" if budget_hit
+               else "likely hit max_turns mid-compose")
         raise AgentRunError(
-            "agent did not emit a verdict (likely hit max_turns mid-compose): "
+            f"agent did not emit a verdict ({why}): "
             f"{final_text[:150] or 'no output'}")
     return final_text, turns_used, tools_used
 

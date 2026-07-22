@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -121,10 +122,17 @@ def list_rca_tickets():
     return store.get_tickets_with_rca()
 
 
-# How long a single investigation may run before we give up and mark it failed.
-# Cross-service / image tickets are slow; keep this generous but bounded so a
-# hung run can never wedge a row at 'running' forever.
-RCA_TIMEOUT_SECONDS = 600
+# Two-tier time bound on a single investigation:
+#   SOFT budget — passed into run_agent, which self-enforces it at a turn boundary
+#     and RETURNS whatever verdict it has. A run that finishes a little late (the
+#     classic "605s vs 600s" case) is kept, not discarded.
+#   HARD ceiling — a generous outer asyncio.wait_for that CANCELS the run. This is a
+#     last resort for a genuinely wedged await (a run stuck mid-tool that the soft
+#     budget's between-turns check can never reach), so a row can't wedge at
+#     'running' forever. It should sit well above the soft budget so normal overruns
+#     never hit it. Both are env-tunable.
+RCA_TIMEOUT_SECONDS = int(os.getenv("RCA_TIMEOUT_SECONDS", "600"))
+RCA_HARD_TIMEOUT_SECONDS = int(os.getenv("RCA_HARD_TIMEOUT_SECONDS", "900"))
 
 
 def _run_rca_background(key: str) -> None:
@@ -145,12 +153,15 @@ def _run_rca_background(key: str) -> None:
                 for p in attachments["pdfs"]
             )
             text = text + "\n\n" + pdf_block
-        # Hard ceiling: a hung/runaway agent must not wedge the DB row at
-        # 'running' forever — on timeout we fall through to mark_failed.
+        # Soft budget lives INSIDE run_agent (it stops at a turn boundary and returns
+        # its verdict — a run that finishes slightly late is kept). The outer wait_for
+        # is only the generous HARD ceiling for a genuinely wedged await; it cancels,
+        # so it must stay well above the soft budget.
         raw, turns_used, tools_used = asyncio.run(
             asyncio.wait_for(
-                run_agent(tkey, text, client, s, jira_mcp=False, images=images),
-                timeout=RCA_TIMEOUT_SECONDS,
+                run_agent(tkey, text, client, s, jira_mcp=False, images=images,
+                          time_budget_s=RCA_TIMEOUT_SECONDS),
+                timeout=RCA_HARD_TIMEOUT_SECONDS,
             )
         )
         v = parse_verdict(raw, tkey)
@@ -165,7 +176,7 @@ def _run_rca_background(key: str) -> None:
             v.notes = (v.notes + "\n\n" + bnote).strip() if v.notes else bnote
         store.save_rca(key, json.dumps(v.to_dict()), turns_used=turns_used)
     except (asyncio.TimeoutError, TimeoutError):
-        mins = RCA_TIMEOUT_SECONDS // 60
+        mins = RCA_HARD_TIMEOUT_SECONDS // 60
         store.mark_failed(key, f"Timed out after {mins} minutes — the investigation "
                                "ran too long. Try again, or check the ticket has "
                                "enough detail to localize.")

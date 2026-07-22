@@ -82,3 +82,33 @@ def test_reset_clears_job_state(tmp_path, monkeypatch):
 
     assert db.get_job("AUT-3") == {"kind": None, "status": None,
                                    "error": None, "result": None}
+
+
+def test_mark_failed_never_clobbers_existing_verdict(tmp_path, monkeypatch):
+    # AUT-9864: a re-run that times out must NOT wipe a previously-good verdict.
+    # mark_running only flips status->running (the verdict stays), so the guard keys
+    # on bot_rca_json, not on status.
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")
+    db.init_db()
+    db.upsert_ticket("AUT-9864", "t", "d", "2026-07-20")
+
+    db.save_rca("AUT-9864", '{"triage": "real_bug"}', turns_used=7)  # first run: good
+    db.mark_running("AUT-9864")                                       # re-run starts
+    db.mark_failed("AUT-9864", "Timed out")                          # re-run times out
+
+    t = db.get_ticket("AUT-9864")
+    assert t["status"] == "rca_ready"                 # NOT 'failed'
+    assert t["bot_rca_json"] == '{"triage": "real_bug"}'  # verdict preserved
+    assert not t["status"] == "running"               # and not left wedged at running
+
+
+def test_mark_failed_records_failure_when_no_verdict(tmp_path, monkeypatch):
+    # A genuine failure with nothing to fall back to still records 'failed'.
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")
+    db.init_db()
+    db.upsert_ticket("AUT-1", "t", "d", "2026-07-20")
+    db.mark_running("AUT-1")
+    db.mark_failed("AUT-1", "Agent could not finish")
+
+    t = db.get_ticket("AUT-1")
+    assert t["status"] == "failed" and t["error"] == "Agent could not finish"
