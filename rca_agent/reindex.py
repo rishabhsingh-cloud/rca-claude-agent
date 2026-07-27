@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import time
 from datetime import date
 from pathlib import Path
@@ -51,6 +52,25 @@ def _git_pull_repos() -> None:
             _log(f"git pull {repo_name}: FAILED — {e}")
 
 
+def _refresh_frontend_index() -> None:
+    """Refresh + publish the frontend screen index (frontend_index/refresh.py): fetch the
+    frontend, rebuild only if its commit changed (SHA gate), and publish into index_dir()
+    for the agent's find_screen tool. Best-effort — a failure here must NOT abort the
+    backend re-index. Runs with cwd = repo root (set by the systemd unit)."""
+    script = Path("frontend_index/refresh.py")
+    if not script.exists():
+        _log("frontend index: refresh.py not found, skipping")
+        return
+    try:
+        r = subprocess.run([sys.executable, str(script)],
+                           capture_output=True, text=True, timeout=1800)
+        out = (r.stdout or "") + (r.stderr or "")
+        last = out.strip().splitlines()[-1] if out.strip() else ""
+        _log(f"frontend index refresh: {'ok' if r.returncode == 0 else 'FAILED'} — {last}")
+    except Exception as e:  # noqa: BLE001
+        _log(f"frontend index refresh: FAILED — {type(e).__name__}: {str(e)[:120]}")
+
+
 def reindex_all() -> None:
     settings = get_settings()
     client = build_client(settings)
@@ -58,6 +78,7 @@ def reindex_all() -> None:
     failed = []
 
     _git_pull_repos()
+    _refresh_frontend_index()
     _log(f"Starting re-index for {len(REPOS)} repos")
     for project in REPOS:
         try:

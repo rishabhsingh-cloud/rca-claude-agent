@@ -35,6 +35,7 @@ from .newrelic import trace_request as _trace_request
 from .routing import read_summary as _read_summary
 from .routing import route_repo as _route_repo
 from .local_search import search_code_local as _search_code_local
+from .screen_index import find_screen as _find_screen
 from .search import web_search as _web_search
 from .stack_trace import parse_stack_trace as _parse_trace
 
@@ -189,6 +190,20 @@ def build_rca_server(client: GitLabClient, search_scope: str | None = None):
             return _err(result["error"])
         return _ok(result)
 
+    @tool("find_screen",
+          "IMAGE-TICKET localizer: given the visible text of a UI screenshot (page title, "
+          "tab names, table column headers, button labels) PLUS the ticket's own "
+          "description, map it to the frontend screen/area and return that area's Jira "
+          "module(s), API endpoints, and backend service. Use this first on tickets with "
+          "app screenshots to know WHICH backend/endpoints to investigate. Pass both the "
+          "text you can read off the screenshot and the ticket wording (robust to low-res).",
+          {"text": str})
+    async def find_screen(args):
+        result = _find_screen(args["text"])
+        if "error" in result:
+            return _err(result["error"])
+        return _ok(result)
+
     @tool("search_architecture",
           "Cross-service platform map: search the architecture reference for where "
           "a symptom originates — service boundaries, Kafka topics, HTTP proxies, "
@@ -320,7 +335,7 @@ def build_rca_server(client: GitLabClient, search_scope: str | None = None):
     tools = [parse_stack_trace, route_repo, fetch_file_lines, git_blame,
              get_commit, merge_requests_for_commit,
              find_callers, find_dependents, get_subgraph, graph_has_edge,
-             search_symbols, search_code, search_code_local, search_architecture, get_repo_summary,
+             search_symbols, search_code, search_code_local, find_screen, search_architecture, get_repo_summary,
              web_search,
              search_nr_errors, search_nr_logs, query_nr,
              find_request_ids, trace_request, query_users_db,
@@ -340,6 +355,7 @@ def build_rca_server(client: GitLabClient, search_scope: str | None = None):
         "mcp__rca__search_symbols",
         "mcp__rca__search_code",
         "mcp__rca__search_code_local",
+        "mcp__rca__find_screen",
         "mcp__rca__search_architecture",
         "mcp__rca__get_repo_summary",
         "mcp__rca__web_search",

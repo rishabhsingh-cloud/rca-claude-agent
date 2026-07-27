@@ -88,3 +88,43 @@ def test_run_agent_soft_budget_keeps_finished_verdict(monkeypatch):
                         time_budget_s=0.01))
     assert text == verdict   # the finished verdict is kept...
     assert turns == 1        # ...and no further turn was consumed past the budget
+
+
+def test_find_screen_tool_registered():
+    # The frontend-index localizer is a general read-only tool, always available.
+    import rca_agent.tools as t
+    _server, names = t.build_rca_server(object())
+    assert "mcp__rca__find_screen" in names
+
+
+def test_image_ticket_note_points_to_find_screen(monkeypatch):
+    # On a ticket WITH screenshots, the user-turn note must tell the agent to use
+    # mcp__rca__find_screen — and that instruction must NOT leak into the system prompt
+    # (prompts.py stays untouched; the nudge lives only in the image branch of run_agent).
+    monkeypatch.setattr(agent, "build_rca_server",
+                        lambda client, search_scope=None: (object(), []))
+    monkeypatch.setattr(agent._trace, "setup_tracing", lambda: None)
+    monkeypatch.setattr(agent, "build_system_prompt", lambda url: "SYSTEM-PROMPT")
+
+    captured = {}
+
+    async def fake_query(prompt, options):
+        captured["sys"] = options.system_prompt
+        async for msg in prompt:                     # streaming-input async generator
+            captured["content"] = msg["message"]["content"]
+        return
+        yield  # noqa: unreachable — makes this an async generator
+
+    monkeypatch.setattr(agent.claude_agent_sdk, "query", fake_query)
+
+    class _S:
+        gitlab_url = "http://gl"
+        model = "claude-opus-4-8"
+
+    images = [{"mimeType": "image/png", "content": "base64data"}]
+    with pytest.raises(agent.AgentRunError):
+        asyncio.run(agent.run_agent("AUT-1", "ticket text", client=object(),
+                                    settings=_S(), images=images))
+    user_text = captured["content"][0]["text"]
+    assert "mcp__rca__find_screen" in user_text        # nudge is in the user turn
+    assert "find_screen" not in captured["sys"]        # ...never in the system prompt

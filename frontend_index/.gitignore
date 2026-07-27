@@ -1,0 +1,4 @@
+# isolated frontend-index workspace — never commit the clone or generated indexes
+frontend-apps/
+*.jsonl
+index_meta.json

@@ -117,7 +117,13 @@ async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClie
     if images:
         img_note = (f"\n\nThe ticket also has {len(images)} screenshot(s) attached. "
                     "Read them carefully — they may show the exact error dialog, "
-                    "UI state, or stack trace that caused the bug.")
+                    "UI state, or stack trace that caused the bug. If a screenshot shows an "
+                    "application screen, read its visible text (page title, tab names, table "
+                    "column headers, button labels) and call mcp__rca__find_screen with that "
+                    "text PLUS this ticket's own description — it maps the screen to its "
+                    "module, API endpoints, and backend service so you know where to "
+                    "investigate. If the image is low-res/unreadable, still call it with the "
+                    "ticket wording.")
         content: list = [{"type": "text", "text": text_part + img_note}]
         for img in images:
             content.append({
