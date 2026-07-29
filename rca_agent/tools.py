@@ -234,13 +234,16 @@ def build_rca_server(client: GitLabClient, search_scope: str | None = None):
         return _ok(_web_search(args["query"], int(args.get("max_results") or 5)))
 
     @tool("search_nr_errors",
-          "Search New Relic APM for recent TransactionErrors for a service. "
-          "Returns production stack traces, error class, message, and count. "
-          "Use when the ticket describes an exception or crash — this gives you "
-          "the actual production trace without needing server access.",
-          {"service": str, "hours_ago": int})
+          "Search New Relic APM for a service's recent errors. WITHOUT gstin: recent "
+          "TransactionErrors (stack trace, error class/message, count). WITH gstin (pass "
+          "the customer GSTIN from the ticket): a PII-safe summary of THAT customer's "
+          "failing endpoints — transaction name + HTTP status + count + avg duration; then "
+          "call find_error_reason(gstin=...) for the exception reason. Use the gstin form on "
+          "tickets that name a specific customer/GSTIN.",
+          {"service": str, "hours_ago": int, "gstin": str})
     async def search_nr_errors(args):
-        return _ok(_search_nr_errors(args["service"], int(args.get("hours_ago") or 2)))
+        return _ok(_search_nr_errors(args["service"], int(args.get("hours_ago") or 2),
+                                     gstin=(args.get("gstin") or "")))
 
     @tool("search_nr_logs",
           "Search New Relic logs for a keyword or error string. "

@@ -107,7 +107,7 @@ def _run_nrql(nrql: str) -> dict:
         return {"error": f"New Relic query failed: {type(e).__name__}: {str(e)[:200]}"}
 
 
-def search_nr_errors(service: str, hours_ago: int = 2) -> dict:
+def search_nr_errors(service: str, hours_ago: int = 2, gstin: str = "") -> dict:
     """Fetch recent TransactionErrors for a service.
 
     Returns error message, stack trace, count, and transaction name.
@@ -117,10 +117,36 @@ def search_nr_errors(service: str, hours_ago: int = 2) -> dict:
     Pass the repo/service name (e.g. "arap-auth-service"); it's resolved to the
     real New Relic appName via `_REPO_TO_NR_APP`, falling back to a substring
     match for services we haven't mapped yet.
+
+    Pass `gstin` to scope to ONE customer's failing requests. TransactionError does NOT
+    carry the GSTIN header, so this switches to a PII-SAFE, CROSS-SERVICE faceted view over
+    `Transaction` (which does): the customer's failing endpoints — `appName` + transaction
+    `name` (often the exact view/function) + HTTP `response.status` + count + avg duration.
+    `service` is IGNORED in this mode (a customer's errors can land on any app, so it facets
+    by appName instead). No `request.uri`/`error.message` is surfaced (those carry
+    names/invoices), so no customer PII leaks. For the exception REASON itself, call
+    `find_error_reason(gstin=...)` (Mongo). The gstin is only a filter, never returned.
     """
     app = _resolve_app(service)
     where = (f"appName = '{app}'" if app
              else f"appName LIKE '%{_like_safe(service)}%'")
+    if (gstin or "").strip():
+        # GSTIN-first is inherently CROSS-SERVICE — a customer's failing requests can land on
+        # any app (the Gstin header rides saas-prod, gst-backend-service, gst-service, ...), so
+        # we do NOT restrict by `service`; instead FACET by appName so the agent sees WHERE.
+        # Safe fields only (appName / name / status) — no uri/message — so no customer PII surfaces.
+        nrql = (
+            f"SELECT count(*), average(duration) FROM Transaction "
+            f"WHERE error IS true AND `request.header.Gstin` = '{_like_safe(gstin)}' "
+            f"FACET appName, name, `response.status` "
+            f"SINCE {hours_ago} hours ago LIMIT {_MAX_RESULTS}"
+        )
+        res = _run_nrql(nrql)
+        if "error" not in res:
+            res["note"] = ("gstin-scoped, cross-service: the customer's failing endpoints "
+                           "(app + name + HTTP status). For the exception reason, call "
+                           "find_error_reason(gstin=...).")
+        return res
     nrql = (
         f"SELECT appName, transactionName, `error.class`, `error.message`, "
         f"`request.uri`, `request.method`, `response.status`, host, duration "
