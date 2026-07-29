@@ -308,8 +308,11 @@ def build_rca_server(client: GitLabClient, search_scope: str | None = None):
           "gstin/reference_id/doc_number is required. Using a GSTIN/doc_number as a "
           "lookup arg is allowed (they will not appear in your verdict). If an "
           "`exception`/error reads like a Python error, it is OUR code bug (see _hint) "
-          "— localize it, do NOT call it user_side. Results are PII-masked; error_case "
-          "'gov' means the government/NIC portal failed (third_party, not our bug).",
+          "— localize it by running search_code_local (+ git_blame) on the named "
+          "symbol / the returned `function`, do NOT call it user_side. This is the Mongo "
+          "step after search_nr_errors(gstin): NR gives the failing endpoint, this gives "
+          "the exact reason + code pointer. Results are PII-masked; error_case 'gov' "
+          "means the government/NIC portal failed (third_party, not our bug).",
           {"gstin": str, "ret_period": str, "reference_id": str, "doc_number": str})
     async def find_error_reason(args):
         return _ok(_find_error_reason(
