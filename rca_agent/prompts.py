@@ -129,6 +129,25 @@ becomes unreachable mid-run, re-pin once and note it in the evidence chain.
    c. `mcp__rca__query_nr` (custom NRQL) for deployment markers (did a deploy
       land just before onset?), slow transactions, error-rate trends.
       Example: SELECT * FROM Deployment SINCE 1 day ago LIMIT 10
+   d. GSTIN-FIRST CHAIN — when the ticket names a specific customer (you have a
+      GSTIN, from the text OR read off a screenshot) AND the failure is in the
+      ENTERPRISE stack (GST-enterprise / saas-prod: reconciliation, GSTR filing,
+      import, portal fetch), do NOT start from the app-name mapping — walk the
+      customer's own trail instead:
+        i.   `mcp__rca__search_nr_errors` with `gstin=<the gstin>` (leave the app
+             name off — this mode is CROSS-SERVICE). It returns THAT customer's
+             failing endpoints: which app, the transaction `name` (often the exact
+             view/function), the HTTP status, count and avg duration. This is WHERE
+             it broke for this customer.
+        ii.  `mcp__rca__find_error_reason` with the same `gstin` for the REAL
+             reason behind the failure (it also returns a `function` = the code that
+             threw). This is the WHY. (See the Exact-error-lookup section below.)
+        iii. localize: `mcp__rca__search_code_local` on that `function` (or the
+             transaction `name` from step i), then `git_blame` /
+             `merge_requests_for_commit` as in the trace path — the CODE.
+      The GSTIN is a lookup key ONLY: it must never appear in your written verdict.
+      This chain does NOT apply to arap (prod-arap carries no GSTIN header) — there,
+      use the app-name flow in 1a.
    If the ticket ALSO pastes a stack trace and it disagrees with the New Relic
    trace, PREFER the New Relic trace (fresher, unedited) and record the
    discrepancy in the evidence chain.
