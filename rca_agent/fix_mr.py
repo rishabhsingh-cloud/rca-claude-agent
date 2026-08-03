@@ -83,7 +83,12 @@ def raise_mr(ticket_key: str, fix: dict, client: GitLabClient) -> dict:
                              "change. Re-run the dev agent, then raise the MR."}
         return {"error": "no applied edits to commit"}
 
-    branch = f"ai-fix/{ticket_key.lower()}"
+    # Use the repos' existing `feature/*` convention, NOT a novel `ai-fix/*` prefix.
+    # Both repos protect `*` at push=Maintainer (so `ai-fix/…` 403s for a Developer)
+    # but have a more-specific `feature/*` rule at push=Developer — GitLab applies the
+    # most-specific match, so a `feature/…` branch is pushable by the Developer fix
+    # token with no new permission. The `ai-fix-` marker stays in the name for clarity.
+    branch = f"feature/ai-fix-{ticket_key.lower()}"
     rationale = (fix.get("rationale") or "").strip()
     results = []
     with httpx.Client(base_url=base + "/api/v4",
