@@ -79,7 +79,7 @@ def build_rca_server(client: GitLabClient, search_scope: str | None = None):
           "GROUND TRUTH. project e.g. 'acme/billing-service'.",
           {"project": str, "path": str, "start": int, "end": int, "ref": str})
     async def fetch_file_lines(args):
-        ref = args.get("ref") or client.default_ref(args["project"])
+        ref = args.get("ref") or client.prod_ref(args["project"])
         try:
             sl = client.get_file_lines(args["project"], ref, args["path"],
                                        int(args["start"]), int(args["end"]))
@@ -93,7 +93,7 @@ def build_rca_server(client: GitLabClient, search_scope: str | None = None):
           "answers the regression question. GROUND TRUTH.",
           {"project": str, "path": str, "line": int, "ref": str})
     async def git_blame(args):
-        ref = args.get("ref") or client.default_ref(args["project"])
+        ref = args.get("ref") or client.prod_ref(args["project"])
         c = client.blame_line(args["project"], ref, args["path"], int(args["line"]))
         if not c:
             return _ok({"commit": None, "note": "no blame data for that line"})
@@ -172,7 +172,7 @@ def build_rca_server(client: GitLabClient, search_scope: str | None = None):
           "pinpoints the file:line where that text lives.",
           {"project": str, "query": str, "ref": str})
     async def search_code(args):
-        ref = args.get("ref") or client.default_ref(args["project"])
+        ref = args.get("ref") or client.prod_ref(args["project"])
         try:
             hits = client.search_blobs(args["project"], ref, args["query"])
         except GitLabError as e:

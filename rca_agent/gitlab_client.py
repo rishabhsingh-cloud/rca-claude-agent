@@ -23,6 +23,19 @@ from urllib.parse import quote
 from .config import FIXTURES_DIR
 
 
+# Canonical PRODUCTION branch per repo. This agent does prod RCA, but these repos'
+# GitLab `default_branch` points at each team's active-dev branch (qa-master /
+# pre-pro-master / qa), NOT prod — so reading `default_ref` fed us QA/pre-prod code
+# for diagnosis and indexing. `prod_ref()` consults this map first and only falls
+# back to `default_ref` for repos not listed here. Confirmed 2026-08-10.
+PROD_BRANCHES: dict[str, str] = {
+    "mastersindia/arap-auth-service": "master",
+    "mastersindia/background-processes": "master",
+    "mastersindia/gst-enterprise-service": "master",
+    "mastersindia/gst-prefect-app": "master",
+}
+
+
 # --- Value types ---------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -91,6 +104,8 @@ class GitLabClient(Protocol):
     def get_file(self, project: str, ref: str, path: str) -> str: ...
 
     def default_ref(self, project: str) -> str: ...
+
+    def prod_ref(self, project: str) -> str: ...
 
     def list_source_files(self, project: str, ref: str,
                           exts: tuple[str, ...] = SOURCE_EXTS) -> list[str]: ...
@@ -165,6 +180,9 @@ class MockGitLabClient:
             return self._meta(project).get("ref") or "main"
         except GitLabError:
             return "main"
+
+    def prod_ref(self, project: str) -> str:
+        return PROD_BRANCHES.get(project) or self.default_ref(project)
 
     def list_source_files(self, project: str, ref: str,
                           exts: tuple[str, ...] = SOURCE_EXTS) -> list[str]:
@@ -288,6 +306,12 @@ class RestGitLabClient:
             info = self._get(f"/projects/{self._pid(project)}")
             self._default_ref_cache[project] = (info or {}).get("default_branch") or "main"
         return self._default_ref_cache[project]
+
+    def prod_ref(self, project: str) -> str:
+        """The repo's PRODUCTION branch for RCA reads/indexing. Prefer the explicit
+        PROD_BRANCHES map — these repos' GitLab `default_branch` is a dev branch, not
+        prod — and fall back to `default_ref` only for repos not in the map."""
+        return PROD_BRANCHES.get(project) or self.default_ref(project)
 
     def _get(self, path: str, **params):
         r = self._client.get(self._base + path, params=params)

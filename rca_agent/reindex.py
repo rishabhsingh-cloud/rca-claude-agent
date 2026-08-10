@@ -3,8 +3,8 @@
 Run manually:  python -m rca_agent.reindex
 Runs on EC2 every 2 nights via systemd timer (rca-reindex.timer).
 
-Branches are resolved automatically via GitLab default_ref() so the script
-doesn't break when branches are renamed.
+Branches are resolved via prod_ref()/PROD_BRANCHES so we index and mirror the
+PRODUCTION branch, not each repo's GitLab default_branch (which is a dev branch).
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from datetime import date
 from pathlib import Path
 
 from .config import get_settings
-from .gitlab_client import build_client
+from .gitlab_client import PROD_BRANCHES, build_client
 from .index import build_index
 
 REPOS = [
@@ -31,25 +31,40 @@ def _log(msg: str) -> None:
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
 
 
+def _git(repo_path: Path, *args: str) -> subprocess.CompletedProcess:
+    """Run a git command in repo_path. Raises RuntimeError on non-zero exit so a
+    failed step can't be silently logged as success (the old `stdout or 'ok'` bug)."""
+    r = subprocess.run(["git", *args], cwd=repo_path,
+                       capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} -> rc={r.returncode}: "
+                           f"{(r.stderr or r.stdout).strip()[:200]}")
+    return r
+
+
 def _git_pull_repos() -> None:
     repos_dir = os.getenv("REPOS_DIR", "").strip()
     if not repos_dir:
-        _log("git pull: REPOS_DIR not set, skipping")
+        _log("git sync: REPOS_DIR not set, skipping")
         return
     for project in REPOS:
         repo_name = project.split("/")[-1]
         repo_path = Path(repos_dir) / repo_name
         if not repo_path.is_dir():
-            _log(f"git pull: {repo_name} not cloned, skipping")
+            _log(f"git sync: {repo_name} not cloned, skipping")
             continue
+        # PROD branch, not the repo's GitLab default_branch. Force the clone onto it:
+        # checkout + hard-reset to origin makes these read-only mirrors self-heal from
+        # a wrong branch OR a diverged/stale state that `pull --ff-only` couldn't fix.
+        branch = PROD_BRANCHES.get(project) or "master"
         try:
-            result = subprocess.run(
-                ["git", "pull", "--ff-only"],
-                cwd=repo_path, capture_output=True, text=True, timeout=60,
-            )
-            _log(f"git pull {repo_name}: {result.stdout.strip() or 'ok'}")
-        except Exception as e:
-            _log(f"git pull {repo_name}: FAILED — {e}")
+            _git(repo_path, "fetch", "--prune", "origin", branch)
+            _git(repo_path, "checkout", branch)
+            _git(repo_path, "reset", "--hard", f"origin/{branch}")
+            head = _git(repo_path, "rev-parse", "--short", "HEAD").stdout.strip()
+            _log(f"git sync {repo_name}: on {branch} @ {head}")
+        except Exception as e:  # noqa: BLE001
+            _log(f"git sync {repo_name}: FAILED — {e}")
 
 
 def _refresh_frontend_index() -> None:
@@ -82,7 +97,7 @@ def reindex_all() -> None:
     _log(f"Starting re-index for {len(REPOS)} repos")
     for project in REPOS:
         try:
-            ref = client.default_ref(project)
+            ref = client.prod_ref(project)
             # Resolve the branch to the exact commit we're indexing and STAMP the
             # graph/summary with it, so the RCA tools can report how stale the map
             # is (graph_sha). Best-effort: if the lookup fails, index unstamped
