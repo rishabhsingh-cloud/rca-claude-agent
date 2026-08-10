@@ -42,6 +42,23 @@ def _git(repo_path: Path, *args: str) -> subprocess.CompletedProcess:
     return r
 
 
+def _sync_repo(repo_path: Path, branch: str) -> str:
+    """Force a (single-branch) clone onto `branch`; return the short HEAD sha.
+
+    These are single-branch clones — the fetch refspec tracks only the dev branch,
+    so a bare `fetch origin <branch>` lands in FETCH_HEAD without creating
+    origin/<branch>, and `checkout <branch>` then fails "pathspec did not match".
+    Add the prod branch to the tracked refspec and fetch it EXPLICITLY into
+    origin/<branch>, then `checkout -B` so the working tree actually moves onto prod.
+    """
+    _git(repo_path, "remote", "set-branches", "--add", "origin", branch)
+    _git(repo_path, "fetch", "origin",
+         f"+refs/heads/{branch}:refs/remotes/origin/{branch}")
+    _git(repo_path, "checkout", "-B", branch, f"origin/{branch}")
+    _git(repo_path, "reset", "--hard", f"origin/{branch}")
+    return _git(repo_path, "rev-parse", "--short", "HEAD").stdout.strip()
+
+
 def _git_pull_repos() -> None:
     repos_dir = os.getenv("REPOS_DIR", "").strip()
     if not repos_dir:
@@ -58,18 +75,7 @@ def _git_pull_repos() -> None:
         # a wrong branch OR a diverged/stale state that `pull --ff-only` couldn't fix.
         branch = PROD_BRANCHES.get(project) or "master"
         try:
-            # These are SINGLE-BRANCH clones — the fetch refspec tracks only the dev
-            # branch, so a bare `fetch origin <branch>` lands in FETCH_HEAD and never
-            # creates origin/<branch>, and `checkout <branch>` then fails "pathspec did
-            # not match" (silently leaving the clone on the dev branch). Add the prod
-            # branch to the tracked refspec and fetch it EXPLICITLY into origin/<branch>,
-            # then checkout -B so the working tree actually moves onto prod.
-            _git(repo_path, "remote", "set-branches", "--add", "origin", branch)
-            _git(repo_path, "fetch", "origin",
-                 f"+refs/heads/{branch}:refs/remotes/origin/{branch}")
-            _git(repo_path, "checkout", "-B", branch, f"origin/{branch}")
-            _git(repo_path, "reset", "--hard", f"origin/{branch}")
-            head = _git(repo_path, "rev-parse", "--short", "HEAD").stdout.strip()
+            head = _sync_repo(repo_path, branch)
             _log(f"git sync {repo_name}: on {branch} @ {head}")
         except Exception as e:  # noqa: BLE001
             _log(f"git sync {repo_name}: FAILED — {e}")
