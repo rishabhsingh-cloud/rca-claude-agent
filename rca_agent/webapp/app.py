@@ -274,10 +274,45 @@ def suggest_fix_endpoint(key: str):
     return {"status": "started"}
 
 
+@app.get("/api/tickets/{key}/fix_branches")
+def fix_branches_endpoint(key: str):
+    """Per-repo branch lists for the reviewed fix, so the UI can offer a target-branch
+    picker before raising the MR. Returns {projects: {<project>: {default, branches}}}.
+    `default` is the pre-selected target (the integration branch = client.default_ref)."""
+    ticket = store.get_ticket(key)
+    if not ticket or not ticket.get("bot_fix_json"):
+        raise HTTPException(400, "No fix suggestion found — run the dev agent first")
+    fix = json.loads(ticket["bot_fix_json"])
+    projects = []
+    for f in fix.get("files", []):
+        p = f.get("project")
+        if p and p not in projects and any(e.get("applied") for e in f.get("edits", [])):
+            projects.append(p)
+    client = _gl()
+    out: dict[str, dict] = {}
+    for p in projects:
+        default = client.default_ref(p)
+        try:
+            branches = client.list_branches(p, limit=200)
+        except Exception as e:  # noqa: BLE001 — degrade to just the default on any API error
+            branches = [default]
+        if default not in branches:
+            branches = [default] + branches
+        out[p] = {"default": default, "branches": branches}
+    return {"projects": out}
+
+
+class RaiseMrRequest(BaseModel):
+    # project -> target branch the MR should merge into. Omitted repos fall back to
+    # the integration default inside raise_mr().
+    targets: dict[str, str] = {}
+
+
 @app.post("/api/tickets/{key}/raise_mr")
-def raise_mr_endpoint(key: str):
+def raise_mr_endpoint(key: str, req: RaiseMrRequest | None = None):
     """Phase 1b (WRITE): push a branch + open a DRAFT MR for the reviewed fix. Uses the
-    separate GITLAB_FIX_TOKEN bot (Developer role — cannot merge). Human-initiated."""
+    separate GITLAB_FIX_TOKEN bot (Developer role — cannot merge). Human-initiated.
+    Optional body {targets: {project: branch}} chooses each repo's merge target."""
     from ..fix_mr import raise_mr
     ticket = store.get_ticket(key)
     if not ticket or not ticket.get("bot_fix_json"):
@@ -285,7 +320,7 @@ def raise_mr_endpoint(key: str):
     fix = json.loads(ticket["bot_fix_json"])
     s = get_settings()
     client = _gl()
-    res = raise_mr(key, fix, client)
+    res = raise_mr(key, fix, client, targets=(req.targets if req else None))
     if res.get("error"):
         raise HTTPException(400, res["error"])
     # Persist the MR result inside the stored fix so the UI still shows it after refresh.

@@ -123,6 +123,9 @@ class GitLabClient(Protocol):
 
     def list_projects(self, search: str = "", limit: int = 100) -> list[dict]: ...
 
+    def list_branches(self, project: str, search: str = "",
+                      limit: int = 100) -> list[str]: ...
+
 
 # --- Mock implementation -------------------------------------------------------
 
@@ -203,6 +206,19 @@ class MockGitLabClient:
                 if not search or search.lower() in proj.lower():
                     out.append({"project": proj, "name": d.name, "description": ""})
         return out[:limit]
+
+    def list_branches(self, project: str, search: str = "",
+                      limit: int = 100) -> list[str]:
+        # Fixtures carry an optional `branches` list; default to just the ref.
+        try:
+            names = list(self._meta(project).get("branches") or [])
+        except GitLabError:
+            names = []
+        if not names:
+            names = [self.default_ref(project)]
+        if search:
+            names = [b for b in names if search.lower() in b.lower()]
+        return names[:limit]
 
     def search_blobs(self, project: str, ref: str, query: str,
                      limit: int = 20) -> list[dict]:
@@ -385,6 +401,40 @@ class RestGitLabClient:
         rows = self._get("/projects", **params) or []
         return [{"project": r.get("path_with_namespace"), "name": r.get("name"),
                  "description": (r.get("description") or "")[:120]} for r in rows[:limit]]
+
+    def list_branches(self, project: str, search: str = "",
+                      limit: int = 100) -> list[str]:
+        # /repository/branches -> [{name, default, ...}], paginated. The default
+        # branch is floated to the front so the UI can pre-select it cheaply.
+        ep = f"/projects/{self._pid(project)}/repository/branches"
+        out: list[str] = []
+        default: str | None = None
+        page = 1
+        while len(out) < limit:
+            params = {"per_page": 100, "page": page}
+            if search:
+                params["search"] = search
+            r = self._client.get(self._base + ep, params=params)
+            if r.status_code >= 400:
+                raise GitLabError(f"GitLab {r.status_code} listing branches: {r.text[:200]}")
+            rows = r.json()
+            if not rows:
+                break
+            for b in rows:
+                name = b.get("name")
+                if not name:
+                    continue
+                if b.get("default"):
+                    default = name
+                out.append(name)
+            nxt = r.headers.get("x-next-page")
+            if not nxt:
+                break
+            page = int(nxt)
+        out = out[:limit]
+        if default and default in out:
+            out = [default] + [b for b in out if b != default]
+        return out
 
     def blame_line(self, project: str, ref: str, path: str, line: int) -> Commit | None:
         # /repository/files/:file_path/blame?ref=  -> [{commit:{...}, lines:[...]}]

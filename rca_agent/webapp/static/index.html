@@ -447,6 +447,7 @@ async function selectTicket(key) {
   `;
 
   loadScoreboard();
+  if (isDev) hydrateBranchPickers(key);
   setTimeout(() => loadAttachments(key), 50);
 }
 
@@ -596,7 +597,7 @@ async function pollFix(key) {
       const d = j.result;
       const idx = tickets.findIndex(t => t.key === key);
       if (idx !== -1) tickets[idx].bot_fix_json = JSON.stringify(d);
-      if (out) out.innerHTML = renderFix(d, key);
+      if (out) { out.innerHTML = renderFix(d, key); hydrateBranchPickers(key); }
     } else {  // failed
       if (out) out.innerHTML =
         `<div style="color:#bf2600;font-size:13px;">${escHtml(j.error || 'Fix generation failed')}</div>`;
@@ -643,9 +644,27 @@ function renderFix(d, key) {
   const anyApplied = files.some(f => (f.edits || []).some(e => e.applied));
   if (d.mr && d.mr.results) {
     h += `<div style="margin-top:10px;font-size:13px;">` + d.mr.results.map(r => r.mr_url
-      ? `✅ <a href="${escHtml(r.mr_url)}" target="_blank" style="color:#0052cc;">Draft MR opened — ${escHtml(r.project)}</a>`
+      ? `✅ <a href="${escHtml(r.mr_url)}" target="_blank" style="color:#0052cc;">Draft MR opened — ${escHtml(r.project)}</a>${r.target_branch ? ` <span style="color:#5e6c84;">→ merges into <code>${escHtml(r.target_branch)}</code></span>` : ''}`
       : `⚠ ${escHtml(r.project)}: ${escHtml(r.error || 'not raised')}`).join('<br>') + `</div>`;
   } else {
+    // Per-repo target-branch picker (populated async by hydrateBranchPickers).
+    if (anyApplied) {
+      const appliedProjects = [...new Set(files
+        .filter(f => f.project && (f.edits || []).some(e => e.applied))
+        .map(f => f.project))];
+      if (appliedProjects.length) {
+        h += `<div style="margin-top:12px;display:flex;flex-direction:column;gap:6px;">`;
+        for (const p of appliedProjects) {
+          h += `<label style="font-size:12px;color:#5e6c84;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span>Merge into${appliedProjects.length > 1 ? ` <strong>${escHtml(p)}</strong>` : ''}:</span>
+            <select class="mrTargetSel" data-project="${escHtml(p)}" data-ticket="${key}"
+              style="font-size:12px;padding:3px 6px;border:1px solid #dfe1e6;border-radius:4px;min-width:180px;">
+              <option value="">loading branches…</option>
+            </select></label>`;
+        }
+        h += `</div>`;
+      }
+    }
     let btns = '';
     if (anyApplied) {
       btns += `<button id="mrBtn" onclick="raiseMr('${key}')" style="background:#0052cc;color:#fff;border:none;padding:6px 14px;border-radius:4px;font-size:13px;font-weight:600;cursor:pointer;">⬆ Raise draft MR</button>`;
@@ -685,11 +704,50 @@ async function rejectFix(key) {
   }
 }
 
+// Fill the target-branch <select>s for a fix, pre-selecting each repo's default
+// (the integration branch). Idempotent: skips selects already loaded.
+async function hydrateBranchPickers(key) {
+  const sels = document.querySelectorAll(
+    `select.mrTargetSel[data-ticket="${key}"]:not([data-loaded])`);
+  if (!sels.length) return;
+  try {
+    const r = await fetch(`/api/tickets/${key}/fix_branches`);
+    if (!r.ok) throw new Error('branch load failed');
+    const d = await r.json();
+    sels.forEach(sel => {
+      sel.dataset.loaded = '1';
+      const info = (d.projects || {})[sel.dataset.project];
+      if (!info || !(info.branches || []).length) {
+        sel.innerHTML = `<option value="">(use default target)</option>`;
+        return;
+      }
+      sel.innerHTML = info.branches.map(b =>
+        `<option value="${escHtml(b)}"${b === info.default ? ' selected' : ''}>`
+        + `${escHtml(b)}${b === info.default ? ' (default)' : ''}</option>`).join('');
+    });
+  } catch (e) {
+    // Leave an empty-value option so raise_mr falls back to the integration default.
+    sels.forEach(sel => {
+      sel.dataset.loaded = '1';
+      sel.innerHTML = `<option value="">(use default target)</option>`;
+    });
+  }
+}
+
 async function raiseMr(key) {
   const btn = document.getElementById('mrBtn');
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Raising draft MR…'; }
+  // Collect the reviewer's per-repo target-branch choices (empty => default).
+  const targets = {};
+  document.querySelectorAll(`select.mrTargetSel[data-ticket="${key}"]`).forEach(sel => {
+    if (sel.value) targets[sel.dataset.project] = sel.value;
+  });
   try {
-    const r = await fetch(`/api/tickets/${key}/raise_mr`, {method: 'POST'});
+    const r = await fetch(`/api/tickets/${key}/raise_mr`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({targets}),
+    });
     const d = await safeJson(r);
     if (!r.ok) {
       showToast(d.detail || 'Raise MR failed', true);
