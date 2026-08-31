@@ -28,3 +28,16 @@ index/
 
 # Locally cloned repos used for fast code search — dev-only, never version this.
 repos/
+
+# Claude Code scratch: leftover git worktrees (embedded repo copies). Only
+# .claude/launch.json is version-controlled.
+.claude/*
+!.claude/launch.json
+
+# Precedent datasets built from real resolved tickets — derived from customer
+# ticket free-text, so kept out of version control pending reliable masking.
+data/
+
+# Local A/B scratch experiments.
+scratch_summary_ab.py
+summary_ab_report.md

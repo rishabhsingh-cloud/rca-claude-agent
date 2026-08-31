@@ -1,0 +1,4 @@
+{ "version":"0.0.1","configurations":[
+  {"name":"rca-static-preview","runtimeExecutable":"python3","runtimeArgs":["-m","http.server","8788","--directory","rca_agent/webapp/static"],"port":8788},
+  {"name":"rca-webapp","runtimeExecutable":".venv/bin/python","runtimeArgs":["-m","uvicorn","rca_agent.webapp.app:app","--port","8799"],"port":8799}
+]}
