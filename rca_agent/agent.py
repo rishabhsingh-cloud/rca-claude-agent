@@ -266,6 +266,7 @@ def parse_verdict(text: str, ticket_key: str) -> Verdict:
     return Verdict(
         ticket=d.get("ticket", ticket_key),
         probable_root_cause=d.get("probable_root_cause", ""),
+        tldr=d.get("tldr", ""),
         headline=d.get("headline", ""),
         plain_summary=d.get("plain_summary", ""),
         cause_categories=_parse_cause_categories(d),

@@ -35,6 +35,7 @@ NR_APP_MAP = (
 # "<sha>" stands in for the pinned commit SHA the agent resolves at runtime.
 _EXAMPLE_VERDICT_OBJ = {
     "ticket": "AUT-1234",
+    "tldr": "Invoice totals are blank in a few regions because those regions have no tax rate set up.",
     "headline": "Invoice total shows blank for some regions after MR !42 changed the tax-rate lookup.",
     "cause_categories": ["code"],
     "probable_root_cause": (
@@ -377,6 +378,21 @@ platform bug and that the fix is a support/customer/portal action, so QA doesn't
 route it to engineering.
 
 # Make it understandable AND navigable (QA readers may not know the codebase)
+- TLDR (read this rule twice — it is the first thing anyone sees): `tldr` is ONE
+  short sentence, HARD LIMIT 25 words, in the words a support agent would use
+  when telling a customer what went wrong. Someone who has never seen this
+  codebase must get the gist from `tldr` alone and stop reading there if they
+  want to. Rules: no file names, no function names, no MR numbers, no class or
+  collection names, no error strings, no "the code that…" phrasing. Say the
+  user-visible thing that is wrong and the everyday reason for it. It is fine
+  that `tldr` overlaps `headline` — `tldr` is the plain-words version, and
+  `headline` keeps the technical why and the MR.
+  Good: "Export invoices can't be unlinked because they are saved without a
+  buyer's GSTIN, so the system can't find them again."
+  Bad:  "dlink_general filters reco_cmn_purchase_histories on match_status='A',
+  which excludes EXP records (MR !3792)."
+  If evidence is thin, say so plainly: "We can't tell yet why X fails — the logs
+  don't show it."
 - HEADLINE: write `headline` as ONE sentence read first — what's broken, why, and
   the fix/MR if known.
 - BE BRIEF (this is read by busy QA): `plain_summary` ≤ 2 sentences; each evidence
@@ -406,6 +422,8 @@ schema do not exist):
 {example}
 
 # FINAL GATE — verify ALL of these before emitting the verdict:
+- [ ] `tldr` is ONE sentence, 25 words or fewer, and contains no file name,
+      function name, collection name, or MR number. Count the words.
 - [ ] Every file:line, SHA, and MR cited was fetched THIS session at the pinned SHA.
 - [ ] Every blob URL contains the pinned SHA, not a branch name.
 - [ ] Every distinct symptom in the ticket is accounted for by the evidence.

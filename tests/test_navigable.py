@@ -33,6 +33,33 @@ def test_schema_requires_plain_summary_and_allows_url():
     assert "url" in s["properties"]["evidence_chain"]["items"]["properties"]
 
 
+def test_schema_requires_tldr():
+    """The plain-words gist pinned at the top of the RCA card is mandatory —
+    the agent must not be able to skip it."""
+    s = Verdict.to_json_schema()
+    assert "tldr" in s["required"]
+    assert s["properties"]["tldr"] == {"type": "string"}
+
+
+def test_tldr_round_trips_through_parse_and_to_dict():
+    """A tldr the model emits must survive into the JSON the webapp reads, and
+    an RCA saved before the field existed must still parse (empty, not crash)."""
+    import json
+
+    from rca_agent.agent import parse_verdict
+
+    payload = {"ticket": "T-1", "tldr": "Export invoices cannot be unlinked.",
+               "headline": "h", "plain_summary": "p", "probable_root_cause": "c",
+               "evidence_chain": [], "is_regression": False, "triage": "real_bug",
+               "confidence": "high", "suggested_next_action": "n"}
+    v = parse_verdict(json.dumps(payload), "T-1")
+    assert v.tldr == "Export invoices cannot be unlinked."
+    assert v.to_dict()["tldr"] == "Export invoices cannot be unlinked."
+
+    del payload["tldr"]
+    assert parse_verdict(json.dumps(payload), "T-1").tldr == ""
+
+
 def _full_verdict():
     return Verdict(
         ticket="T-1", probable_root_cause="long technical cause paragraph here",

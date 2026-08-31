@@ -53,6 +53,11 @@ class EvidenceLink:
 class Verdict:
     ticket: str
     probable_root_cause: str
+    # The 25-words-or-fewer answer, in the words a support person would use (the
+    # cap and the no-jargon rules are enforced in prompts.py). Pinned at the
+    # top of the RCA card so a reader gets the gist before any technical prose.
+    # Deliberately NOT a replacement for `headline` — that one keeps the MR/why.
+    tldr: str = ""
     # One-line TL;DR read first: what's broken, why, and the fix/MR if known.
     headline: str = ""
     # Jargon-free explanation for someone who does NOT know the codebase: what is
@@ -91,12 +96,13 @@ class Verdict:
             "type": "object",
             "additionalProperties": False,
             "required": [
-                "ticket", "headline", "cause_categories", "probable_root_cause",
-                "plain_summary", "evidence_chain", "is_regression", "triage",
-                "confidence", "suggested_next_action",
+                "ticket", "tldr", "headline", "cause_categories",
+                "probable_root_cause", "plain_summary", "evidence_chain",
+                "is_regression", "triage", "confidence", "suggested_next_action",
             ],
             "properties": {
                 "ticket": {"type": "string"},
+                "tldr": {"type": "string"},
                 "headline": {"type": "string"},
                 "cause_categories": {
                     "type": "array", "minItems": 1,
