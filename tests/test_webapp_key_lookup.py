@@ -3,7 +3,9 @@ list's filters and its 100-newest cap (the AUT-10001 case)."""
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
+
+pytest.importorskip("fastapi")  # webapp extra; skip where only .[dev] is installed
+from fastapi.testclient import TestClient  # noqa: E402
 
 from rca_agent.jira import JiraError
 from rca_agent.webapp import app as webapp
