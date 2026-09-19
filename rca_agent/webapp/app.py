@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from ..agent import blame_dropped_note, parse_verdict, run_agent
 from ..config import get_settings
 from ..gitlab_client import build_client
-from ..jira import JiraClient
+from ..jira import JiraClient, JiraError
 from ..schema import verdict_to_adf
 from ..tickets import build_ticket_source
 from ..verify import verify_verdict
@@ -97,22 +97,57 @@ def list_tickets(from_date: str = "", to_date: str = "", include_resolved: bool 
         clauses.append(f'created <= "{to_date} 23:59"')
     jql = " AND ".join(clauses) + " ORDER BY created DESC"
     issues = jira.search(jql, max_results=100)
-    keys = []
-    for i in issues:
-        key = i["key"]
-        fields = i.get("fields", {})
-        title = fields.get("summary", "")
-        desc = fields.get("description", "") or ""
-        if isinstance(desc, dict):
-            from ..tickets import flatten_adf
-            desc = flatten_adf(desc)
-        created_at = fields.get("created", "")
-        store.upsert_ticket(key, title, desc, created_at)
-        keys.append(key)
     # Return ONLY the tickets just fetched (AUT + this date range) with their
     # stored RCA state — not the whole DB, which still holds old non-AUT rows
     # from earlier syncs.
-    return [t for k in keys if (t := store.get_ticket(k))]
+    return [t for i in issues if (t := _sync_issue(i))]
+
+
+def _sync_issue(issue: dict) -> dict | None:
+    """Store one Jira issue (title/description/created) locally and return the
+    stored row, which carries the RCA state the UI renders."""
+    key = issue["key"]
+    fields = issue.get("fields", {})
+    title = fields.get("summary", "")
+    desc = fields.get("description", "") or ""
+    if isinstance(desc, dict):
+        from ..tickets import flatten_adf
+        desc = flatten_adf(desc)
+    created_at = fields.get("created", "")
+    store.upsert_ticket(key, title, desc, created_at)
+    return store.get_ticket(key)
+
+
+# A ticket key typed into the search box. Bare digits are accepted as shorthand
+# ("10001" -> AUT-10001) because the dashboard is AUT-only.
+_TICKET_KEY_RE = _re.compile(r"^(?:AUT-)?(\d{1,7})$", _re.IGNORECASE)
+
+
+def normalize_ticket_key(text: str) -> str | None:
+    """'10001' / 'aut-10001' / ' AUT-10001 ' -> 'AUT-10001'; anything else -> None."""
+    m = _TICKET_KEY_RE.match((text or "").strip())
+    return f"AUT-{m.group(1)}" if m else None
+
+
+@app.get("/api/tickets/{key}")
+def get_ticket_by_key(key: str):
+    """Open ONE ticket straight from Jira by key, ignoring the list filters.
+
+    The list endpoint is bounded by work type, date range, the resolved toggle
+    and a 100-newest cap, so an older or resolved ticket can be impossible to
+    reach through it (AUT-10001 was the motivating case). This path has none of
+    those bounds: any AUT key the Jira token can read is fetched, synced locally
+    and returned in the same shape as a list row. 404 if Jira has no such issue."""
+    norm = normalize_ticket_key(key)
+    if not norm:
+        raise HTTPException(400, "Not a ticket key (expected AUT-<number>)")
+    try:
+        issue = _jira().get_issue(norm)
+    except JiraError as e:
+        if "not found" in str(e):
+            raise HTTPException(404, f"{norm} not found in Jira")
+        raise HTTPException(502, f"Jira lookup failed: {e}")
+    return _sync_issue(issue)
 
 
 @app.get("/api/rca_tickets")

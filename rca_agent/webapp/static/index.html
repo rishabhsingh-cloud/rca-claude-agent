@@ -167,7 +167,7 @@
       <button class="refresh-btn" onclick="refresh()">Refresh</button>
     </div>
     <div class="filter-bar">
-      <input type="text" id="searchBox" placeholder="Search key or title..." oninput="renderTicketList()">
+      <input type="text" id="searchBox" placeholder="Search key or title, or type a key (e.g. AUT-10001) to open it" oninput="onSearchInput()" onkeydown="onSearchKeydown(event)">
       <div id="triageFilters">
         <label style="display:block;font-size:11px;color:#5e6c84;margin-bottom:8px;">Work type
           <select id="workType" onchange="loadTickets()" style="width:100%;padding:6px 8px;border:1px solid #dfe1e6;border-radius:4px;font-size:12px;margin-top:2px;">
@@ -357,6 +357,57 @@ async function loadTickets() {
   }
 }
 
+// --- Open-by-key -----------------------------------------------------------
+// The list is bounded (work type, date range, resolved toggle, 100 newest), so a
+// ticket outside those bounds can't be reached by filtering the list. When the
+// search text looks like a ticket key ("AUT-10001" or just "10001") and no loaded
+// ticket matches it, fetch that one ticket straight from Jira instead.
+let keyLookupTimer = null;
+
+function normalizeTicketKey(text) {
+  const m = /^(?:AUT-)?(\d{1,7})$/i.exec((text || '').trim());
+  return m ? 'AUT-' + m[1] : null;
+}
+
+function onSearchInput() {
+  renderTicketList();
+  clearTimeout(keyLookupTimer);
+  if (currentTab !== 'triage') return;
+  const key = normalizeTicketKey(document.getElementById('searchBox').value);
+  if (!key || tickets.some(t => t.key === key)) return;
+  // Debounced so we don't hit Jira on every keystroke while the key is typed.
+  keyLookupTimer = setTimeout(() => lookupTicketByKey(key), 700);
+}
+
+function onSearchKeydown(ev) {
+  if (ev.key !== 'Enter' || currentTab !== 'triage') return;
+  const key = normalizeTicketKey(document.getElementById('searchBox').value);
+  if (!key) return;
+  clearTimeout(keyLookupTimer);
+  if (tickets.some(t => t.key === key)) { selectTicket(key); return; }
+  lookupTicketByKey(key);
+}
+
+async function lookupTicketByKey(key) {
+  const el = document.getElementById('ticketList');
+  el.innerHTML = `<div style="padding:16px;color:#5e6c84;font-size:13px;">Looking up ${escHtml(key)} in Jira...</div>`;
+  try {
+    const res = await fetch('/api/tickets/' + encodeURIComponent(key));
+    if (res.status === 404) {
+      el.innerHTML = `<div style="padding:16px;color:#5e6c84;font-size:13px;">${escHtml(key)} not found in Jira</div>`;
+      return;
+    }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const t = await res.json();
+    // Show it at the top of the current list (it's outside the list's filters).
+    tickets = [t, ...tickets.filter(x => x.key !== t.key)];
+    renderTicketList();
+    selectTicket(t.key);
+  } catch (e) {
+    el.innerHTML = `<div style="padding:16px;color:#bf2600;font-size:13px;">Failed to look up ${escHtml(key)}</div>`;
+  }
+}
+
 function renderTicketList() {
   const el = document.getElementById('ticketList');
   const q = (document.getElementById('searchBox').value || '').trim().toLowerCase();
@@ -364,7 +415,10 @@ function renderTicketList() {
     ? tickets.filter(t => (t.key + ' ' + (t.title || '')).toLowerCase().includes(q))
     : tickets;
   if (!filtered.length) {
-    el.innerHTML = '<div style="padding:16px;color:#5e6c84;font-size:13px;">No tickets found</div>';
+    const key = currentTab === 'triage' ? normalizeTicketKey(q) : null;
+    el.innerHTML = key
+      ? `<div style="padding:16px;color:#5e6c84;font-size:13px;">Not in the current list — press Enter to open ${escHtml(key)} from Jira</div>`
+      : '<div style="padding:16px;color:#5e6c84;font-size:13px;">No tickets found</div>';
     return;
   }
   el.innerHTML = filtered.map((t, i) => `
