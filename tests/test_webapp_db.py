@@ -131,3 +131,43 @@ def test_mark_failed_records_failure_when_no_verdict(tmp_path, monkeypatch):
 
     t = db.get_ticket("AUT-1")
     assert t["status"] == "failed" and t["error"] == "Agent could not finish"
+
+
+def test_claim_running_is_atomic_and_claim_auto_run_is_once_only(tmp_path, monkeypatch):
+    # Auto-RCA: the poller and the Run button both go through conditional UPDATEs,
+    # so exactly one of two concurrent claims wins; and a ticket is auto-run at most
+    # once, ever — a human /reset (which keeps auto_run_at) must not re-arm it.
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")
+    db.init_db()
+    db.upsert_ticket("AUT-5", "t", "d", "2026-09-20T10:00:00.000+0530")
+
+    assert db.claim_running("AUT-5", "manual") is True
+    assert db.claim_running("AUT-5", "manual") is False       # already running
+    assert db.claim_auto_run("AUT-5") is False                # not 'pending'
+    db.mark_failed("AUT-5", "boom")                           # back to failed, no verdict
+
+    db.upsert_ticket("AUT-6", "t", "d", "2026-09-20T10:00:00.000+0530")
+    assert db.claim_auto_run("AUT-6") is True
+    row = db.get_ticket("AUT-6")
+    assert row["status"] == "running" and row["trigger_source"] == "auto"
+    assert row["auto_run_at"] and db.count_auto_runs_today() == 1
+    assert db.claim_auto_run("AUT-6") is False                # in flight
+    db.save_rca("AUT-6", "{}")
+    assert db.claim_auto_run("AUT-6") is False                # has a verdict
+
+    # /reset semantics: verdict cleared, status pending, auto_run_at KEPT.
+    with db._conn() as con:
+        con.execute("UPDATE reviews SET bot_rca_json=NULL, status='pending' WHERE key='AUT-6'")
+    assert db.claim_auto_run("AUT-6") is False                # never auto-run twice
+    assert db.claim_running("AUT-6", "manual") is True        # a human still can
+    assert db.running_auto_keys() == []
+
+
+def test_settings_kv_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")
+    db.init_db()
+    assert db.get_setting("autorun", {"x": 1}) == {"x": 1}
+    db.set_setting("autorun", {"enabled": True, "allowed_types": ["Bug"]})
+    assert db.get_setting("autorun") == {"enabled": True, "allowed_types": ["Bug"]}
+    db.set_setting("autorun", {"enabled": False})
+    assert db.get_setting("autorun") == {"enabled": False}

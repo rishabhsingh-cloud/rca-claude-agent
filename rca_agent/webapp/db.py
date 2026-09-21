@@ -4,9 +4,13 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "rca_reviews.db"
+
+# The team's day for the Auto-RCA daily cap. Fixed offset, no DST.
+IST = timezone(timedelta(hours=5, minutes=30))
 
 # Verdict wording changed from "BUG Accepted" to "Issue Accepted"; RCAs stored
 # before that still carry the old label.
@@ -23,7 +27,9 @@ def _conn():
     the process eventually hit its fd limit (OSError [Errno 24] Too many open
     files) and stopped accepting connections. Committing still happens via the
     inner `with con`; the `finally` guarantees the handle is released."""
-    con = sqlite3.connect(DB_PATH)
+    # timeout: request threads, RCA worker threads and the Auto-RCA poller all write;
+    # wait for a busy writer instead of raising "database is locked".
+    con = sqlite3.connect(DB_PATH, timeout=10)
     con.row_factory = sqlite3.Row
     try:
         with con:
@@ -34,6 +40,9 @@ def _conn():
 
 def init_db() -> None:
     with _conn() as con:
+        # WAL: readers (the dashboard's polling) no longer block on a writer
+        # (poller / RCA threads). Persistent per database file; harmless to repeat.
+        con.execute("PRAGMA journal_mode=WAL")
         con.execute("""
             CREATE TABLE IF NOT EXISTS reviews (
                 key             TEXT PRIMARY KEY,
@@ -63,11 +72,24 @@ def init_db() -> None:
                     # A human-written RCA saved locally but NOT yet posted to Jira
                     # (QA can draft now, post later). Independent of bot_rca_json /
                     # status; cleared once the human RCA is actually posted.
-                    "human_rca_draft TEXT"):
+                    "human_rca_draft TEXT",
+                    # Auto-RCA: who started the last run ('manual' | 'auto'), and the
+                    # UTC time of the first AUTOMATIC claim. auto_run_at is set once and
+                    # never cleared (not by /reset, not by failure) — it is the poller's
+                    # idempotency marker, so a ticket is auto-run at most once, ever.
+                    "trigger_source TEXT", "auto_run_at TEXT"):
             try:
                 con.execute(f"ALTER TABLE reviews ADD COLUMN {col}")
             except sqlite3.OperationalError:
                 pass
+        # Small key/value store for dashboard-editable configuration (Auto-RCA rules).
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key        TEXT PRIMARY KEY,
+                value      TEXT NOT NULL,
+                updated_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
         # Recover rows wedged at 'running' by a crash/restart mid-run: their
         # background thread is gone, so fail them (Retry button) instead of
         # leaving an un-runnable spinner.
@@ -199,12 +221,92 @@ def get_job(key: str) -> dict | None:
     }
 
 
+def claim_running(key: str, source: str = "manual") -> bool:
+    """Atomically claim an RCA run for `key`: flip it to 'running' unless a run is
+    already in flight. Returns False when it is (so a double-click, or the Auto-RCA
+    poller racing a click, can never launch two investigations for one ticket).
+    Same conditional-UPDATE idiom as `start_job`."""
+    with _conn() as con:
+        cur = con.execute("""
+            UPDATE reviews SET status = 'running', error = NULL, trigger_source = ?,
+            updated_at = datetime('now') WHERE key = ? AND status != 'running'
+        """, (source, key))
+        return cur.rowcount > 0
+
+
+def claim_auto_run(key: str) -> bool:
+    """The Auto-RCA poller's claim. Stricter than `claim_running`: only a ticket that
+    has never been investigated (no verdict, no earlier automatic attempt, status
+    still 'pending') can be taken, and the attempt is stamped in `auto_run_at` so the
+    same ticket is never auto-run twice — even after a human /reset."""
+    with _conn() as con:
+        cur = con.execute("""
+            UPDATE reviews SET status = 'running', error = NULL, trigger_source = 'auto',
+            auto_run_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+            updated_at = datetime('now')
+            WHERE key = ? AND status = 'pending' AND bot_rca_json IS NULL
+              AND auto_run_at IS NULL
+        """, (key,))
+        return cur.rowcount > 0
+
+
 def mark_running(key: str) -> None:
+    """Unconditional legacy setter; prefer `claim_running` (atomic) for new callers."""
     with _conn() as con:
         con.execute("""
             UPDATE reviews SET status = 'running', error = NULL,
             updated_at = datetime('now') WHERE key = ?
         """, (key,))
+
+
+def ist_day_start_utc(now: datetime | None = None) -> str:
+    """Midnight IST of the current (IST) day, as a UTC ISO 'Z' string comparable with
+    `auto_run_at`. The daily cap resets at midnight in the team's timezone."""
+    now = now or datetime.now(timezone.utc)
+    local = now.astimezone(IST)
+    start = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def count_auto_runs_today(now: datetime | None = None) -> int:
+    """Automatic run ATTEMPTS since midnight IST (successes and failures alike —
+    each one cost a Claude run, which is what the cap bounds)."""
+    with _conn() as con:
+        return con.execute(
+            "SELECT COUNT(*) FROM reviews WHERE auto_run_at >= ?",
+            (ist_day_start_utc(now),)).fetchone()[0]
+
+
+def running_auto_keys() -> list[str]:
+    """Tickets whose automatic investigation is in flight right now."""
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT key FROM reviews WHERE status = 'running' AND trigger_source = 'auto' "
+            "ORDER BY updated_at").fetchall()
+        return [r["key"] for r in rows]
+
+
+# --- Dashboard-editable settings (JSON values) --------------------------------
+
+def get_setting(key: str, default=None):
+    with _conn() as con:
+        row = con.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    if row is None:
+        return default
+    try:
+        return json.loads(row["value"])
+    except (ValueError, TypeError):
+        return default
+
+
+def set_setting(key: str, value) -> None:
+    with _conn() as con:
+        con.execute("""
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, datetime('now'))
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                           updated_at = excluded.updated_at
+        """, (key, json.dumps(value)))
 
 
 def mark_failed(key: str, error: str | None = None) -> None:

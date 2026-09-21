@@ -190,13 +190,28 @@ A FastAPI app ([`webapp/app.py`](rca_agent/webapp/app.py)) with a SQLite store
   verdict* and *by cause bucket*.
 - **Fix flow** — **Suggest a fix** (dry-run diff), then optionally **Raise MR** (draft) or **Reject
   fix**.
+- **Auto-RCA** ([`webapp/autorun.py`](rca_agent/webapp/autorun.py)) — a poller inside the webapp
+  process that investigates **new** tickets as they are raised, into the same review queue.
+  Rules and caps are edited in the Triage sidebar (**Auto-RCA → Settings**) and stored in SQLite,
+  not `.env`; a change applies on the next poll, no restart. A ticket is auto-run when **all** of:
+  project AUT · work type in the allowlist (default Bug + Incident) · not Done · created *after*
+  Auto-RCA was switched on (no backfill) · never investigated before · **not a QA / non-prod
+  environment ticket** — no excluded label (default `qa-found`) and no hostname in the text or
+  Environment field carrying an excluded keyword (default qa, qa1, qa2, qa3, uat, staging, preprod;
+  `qa3-enterprise.…` → `qa3`; Jira's own attachment host is ignored). Caps: max parallel automatic
+  runs (default 2) and automatic runs per IST day (default 30). Ships **OFF**; it **never posts to
+  Jira** — reviewers still Accept / Reject. Automatic results carry an `auto` badge. Runs as one
+  thread from the FastAPI lifespan: single uvicorn worker only; `RCA_AUTORUN_POLLER=0` keeps the
+  thread out of a process (local dev / tests). Each ticket is auto-run at most once, ever
+  (`reviews.auto_run_at`), even after a manual re-run/reset.
 
 Selected endpoints: `GET /api/tickets`, `POST /api/tickets/{key}/rca`,
 `POST /api/tickets/{key}/accept[_and_post]`, `POST /api/tickets/{key}/reject`,
-`POST /api/tickets/{key}/suggest_fix`, `POST /api/tickets/{key}/raise_mr`, `GET /api/quality`.
+`POST /api/tickets/{key}/suggest_fix`, `POST /api/tickets/{key}/raise_mr`, `GET /api/quality`,
+`GET|PUT /api/autorun/settings`, `GET /api/autorun/status`, `POST /api/autorun/poll_now`.
 
-The old **autonomous auto-posting daemon** ([`daemon.py`](rca_agent/daemon.py)) is **retired** in
-favor of this human-in-the-loop review.
+The old **autonomous auto-posting daemon** ([`daemon.py`](rca_agent/daemon.py)) is **retired**:
+Auto-RCA above is its human-in-the-loop successor (it fills the review queue instead of posting).
 
 ---
 
@@ -389,10 +404,10 @@ rca_agent/
   architecture.py / routing.py / summarize.py / index.py / reindex.py   localization + indexing
   search.py         web search (Tavily)
   trace.py          optional Phoenix tracing (guarded no-op unless RCA_TRACE=1)
-  daemon.py         retired autonomous loop (kept for reference)
+  daemon.py         retired autonomous loop (kept for reference; see webapp/autorun.py)
   run.py            CLI entry point
   eval/             the Phoenix evaluation harness (see eval/README.md)
-  webapp/           FastAPI review dashboard (app.py + db.py + static/index.html)
+  webapp/           FastAPI review dashboard (app.py + db.py + autorun.py + static/index.html)
 deploy/             systemd units (rca-webapp, rca-reindex)
 fixtures/           mock backend data (repos, summaries, architecture)
 index/              live repo summaries + architecture map

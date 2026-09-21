@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -17,9 +18,34 @@ from ..jira import JiraClient, JiraError
 from ..schema import verdict_to_adf
 from ..tickets import build_ticket_source
 from ..verify import verify_verdict
+from . import autorun
 from . import db as store
+from .autorun import WORK_TYPES as _WORK_TYPES
 
-app = FastAPI(title="RCA Review")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Start the Auto-RCA poller thread with the server and stop it on shutdown.
+
+    RCA_AUTORUN_POLLER=0 keeps the thread out of this process entirely (local dev,
+    tests). That is the process switch; the FEATURE switch is the `enabled` flag the
+    dashboard panel stores in SQLite, re-read every tick — so turning Auto-RCA on or
+    off never needs a restart. Single uvicorn worker only: N workers = N pollers."""
+    p = None
+    if os.getenv("RCA_AUTORUN_POLLER", "1") != "0":
+        p = autorun.Poller(run_rca=_run_rca_background, sync_issue=_sync_issue,
+                           jira_factory=_jira)
+        autorun.poller = p
+        p.start()
+    try:
+        yield
+    finally:
+        if p is not None:
+            p.stop()
+            autorun.poller = None
+
+
+app = FastAPI(title="RCA Review", lifespan=lifespan)
 STATIC = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
@@ -61,11 +87,9 @@ import re as _re
 
 _DATE_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
-# The work types (Jira issue types) the AUT project defines. Whitelisted so a
-# value picked in the UI dropdown is interpolated into JQL only if it's a known
-# type — the value can never be used to inject arbitrary JQL.
-_WORK_TYPES = ("New Feature", "Task", "Bug", "Epic", "Subtask",
-               "Enhancement", "Maintenance", "Incident", "Defect")
+# _WORK_TYPES (imported from autorun): the work types the AUT project defines.
+# Whitelisted so a value picked in the UI dropdown is interpolated into JQL only if
+# it's a known type — the value can never be used to inject arbitrary JQL.
 
 
 @app.get("/api/tickets")
@@ -230,9 +254,10 @@ def run_rca(key: str):
     ticket = store.get_ticket(key)
     if not ticket:
         raise HTTPException(404, "Ticket not found")
-    if ticket["status"] == "running":
+    # Atomic claim: a double-click, or the Auto-RCA poller racing this click, can't
+    # both pass a read-then-write check and launch two investigations.
+    if not store.claim_running(key, "manual"):
         return {"status": "already_running"}
-    store.mark_running(key)
     t = threading.Thread(target=_run_rca_background, args=(key,), daemon=True)
     t.start()
     return {"status": "started"}
@@ -514,6 +539,67 @@ def reject(key: str, body: RejectRequest):
     threading.Thread(target=_reject_background, args=(key, body.human_rca),
                      daemon=True).start()
     return {"status": "started"}
+
+
+# --- Auto-RCA (poller) settings + status ---------------------------------------
+
+class AutorunSettingsUpdate(BaseModel):
+    """Partial update from the dashboard panel; every field optional."""
+    enabled: bool | None = None
+    interval_seconds: int | None = None
+    allowed_types: list[str] | None = None
+    max_parallel: int | None = None
+    daily_cap: int | None = None
+    exclude_labels: list[str] | None = None
+    exclude_env_keywords: list[str] | None = None
+
+
+def _autorun_payload() -> dict:
+    s = autorun.load_settings()
+    return {**s, "work_types": list(_WORK_TYPES), "limits": autorun.LIMITS}
+
+
+@app.get("/api/autorun/settings")
+def autorun_settings():
+    return _autorun_payload()
+
+
+@app.put("/api/autorun/settings")
+def update_autorun_settings(body: AutorunSettingsUpdate):
+    """Validate + store the rules. Flipping `enabled` off->on stamps `enabled_at`,
+    the watermark: only tickets created after that moment are ever auto-run."""
+    current = autorun.load_settings()
+    try:
+        new = autorun.apply_update(current, body.model_dump(exclude_none=True))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    autorun.save_settings(new)
+    return _autorun_payload()
+
+
+@app.get("/api/autorun/status")
+def autorun_status():
+    """Live poller state for the panel's status line."""
+    s = autorun.load_settings()
+    p = autorun.poller
+    snap = p.snapshot() if p is not None else {"poller_alive": False, "state": "not started"}
+    return {**snap,
+            "enabled": s["enabled"], "enabled_at": s.get("enabled_at"),
+            "interval_seconds": s["interval_seconds"], "max_parallel": s["max_parallel"],
+            "daily_cap": s["daily_cap"],
+            "runs_today": store.count_auto_runs_today(),
+            "in_flight": store.running_auto_keys()}
+
+
+@app.post("/api/autorun/poll_now")
+def autorun_poll_now():
+    """Run one poll immediately (the panel's "Poll now" — verification/demo)."""
+    p = autorun.poller
+    if p is None:
+        raise HTTPException(409, "Auto-RCA poller is not running in this process "
+                                 "(RCA_AUTORUN_POLLER=0?)")
+    p.run_once()
+    return autorun_status()
 
 
 @app.get("/api/scoreboard")

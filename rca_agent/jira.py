@@ -71,7 +71,10 @@ class JiraClient:
     Implements the TicketSource protocol (`get(key) -> (key, text)`).
     """
 
-    _FIELDS = "summary,description,status,priority,issuetype,labels,comment,attachment"
+    # `created`/`project`/`environment` are read by the Auto-RCA poller (watermark,
+    # project guard, QA-environment exclusion); `created` also fills reviews.created_at.
+    _FIELDS = ("summary,description,status,priority,issuetype,labels,comment,attachment,"
+               "created,project,environment")
 
     def __init__(self, base_url: str, email: str, token: str, timeout: float = 20.0):
         try:

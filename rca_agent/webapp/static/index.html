@@ -52,6 +52,40 @@
   .badge.rca_ready { background: #fff0b3; color: #974f0c; }
   .badge.accepted  { background: #e3fcef; color: #006644; }
   .badge.rejected  { background: #ffebe6; color: #bf2600; }
+  .badge.auto      { background: #eae6ff; color: #403294; margin-left: 4px; }
+
+  /* Auto-RCA (poller) status + settings, in the Triage sidebar */
+  .autorun-row { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #dfe1e6;
+                 font-size: 11px; color: #5e6c84; display: flex; flex-wrap: wrap;
+                 gap: 4px 8px; align-items: center; }
+  .autorun-row .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+                      background: #97a0af; margin-right: 4px; vertical-align: middle; }
+  .autorun-row .dot.on { background: #00875a; }
+  .autorun-row .dot.err { background: #de350b; }
+  .autorun-row a { color: #0052cc; cursor: pointer; text-decoration: none; }
+  .autorun-row a:hover { text-decoration: underline; }
+  .autorun-row .err-msg { flex-basis: 100%; color: #bf2600; }
+  .autorun-panel { display: none; margin-top: 8px; padding: 10px; background: #fafbfc;
+                   border: 1px solid #dfe1e6; border-radius: 4px; font-size: 11px;
+                   color: #172b4d; }
+  .autorun-panel.show { display: block; }
+  .autorun-panel label { display: block; margin-bottom: 8px; color: #5e6c84; }
+  .autorun-panel input[type=number], .autorun-panel input[type=text] {
+    width: 100%; padding: 5px 7px; border: 1px solid #dfe1e6; border-radius: 4px;
+    font-size: 12px; margin-top: 2px; box-sizing: border-box; }
+  .autorun-panel .types { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px;
+                          margin: 2px 0 8px; color: #172b4d; }
+  .autorun-panel .types label { display: flex; align-items: center; gap: 5px;
+                                margin: 0; color: #172b4d; cursor: pointer; }
+  .autorun-panel .types input { width: auto; }
+  .autorun-panel .toggle { display: flex; align-items: center; gap: 6px; font-weight: 600;
+                           color: #172b4d; cursor: pointer; }
+  .autorun-panel .toggle input { width: auto; }
+  .autorun-panel .hint { color: #97a0af; font-size: 10px; margin-top: -6px; margin-bottom: 8px; }
+  .autorun-panel .actions { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+  .autorun-panel .save { background: #0052cc; color: #fff; border: none; border-radius: 4px;
+                         padding: 6px 12px; font-size: 12px; cursor: pointer; }
+  .autorun-panel .save:disabled { opacity: .6; cursor: default; }
 
   /* Right panel */
   .detail { flex: 1; overflow-y: auto; padding: 24px; display: flex;
@@ -191,6 +225,30 @@
         <label style="font-size:11px;color:#5e6c84;display:flex;align-items:center;gap:6px;cursor:pointer;">
           <input type="checkbox" id="includeResolved" onchange="loadTickets()" style="width:auto;"> Include resolved (Done) tickets
         </label>
+
+        <!-- Auto-RCA: the poller that investigates NEW tickets matching the rules
+             below, into this dashboard for review. Never posts to Jira. -->
+        <div class="autorun-row" id="autorunStatus">
+          <span><span class="dot"></span><b>Auto-RCA</b> …</span>
+        </div>
+        <div class="autorun-panel" id="autorunPanel">
+          <label class="toggle"><input type="checkbox" id="arEnabled"> Auto-RCA on</label>
+          <div class="hint" style="margin-top:4px;">Only tickets created after switching on are picked up — nothing older is backfilled.</div>
+          <div style="color:#5e6c84;margin-bottom:2px;">Work types to investigate</div>
+          <div class="types" id="arTypes"></div>
+          <label>Poll every (seconds)<input type="number" id="arInterval" min="30" max="3600" step="10"></label>
+          <label>Max parallel automatic runs<input type="number" id="arParallel" min="1" max="4"></label>
+          <label>Max automatic runs per day<input type="number" id="arDaily" min="0" max="200"></label>
+          <div class="hint">Resets at midnight IST. Manual runs are not counted.</div>
+          <label>Skip tickets with labels<input type="text" id="arLabels" placeholder="qa-found, …"></label>
+          <label>Skip non-prod host keywords<input type="text" id="arEnvKw" placeholder="qa, qa1, uat, staging, …"></label>
+          <div class="hint">Matched against hostnames in the ticket text and the Environment field (qa3-enterprise.… → “qa3”). Jira’s own attachment host is ignored.</div>
+          <div class="actions">
+            <button class="save" id="arSave" onclick="saveAutorunSettings()">Save</button>
+            <a style="color:#5e6c84;cursor:pointer;" onclick="toggleAutorunPanel(false)">Close</a>
+            <span id="arSince" style="margin-left:auto;color:#97a0af;"></span>
+          </div>
+        </div>
       </div>
     </div>
     <div class="ticket-list" id="ticketList">
@@ -244,6 +302,7 @@ function switchTab(tab) {
   }
   // Date/resolved filters only make sense for the Jira-synced Triage list.
   document.getElementById('triageFilters').style.display = tab === 'triage' ? '' : 'none';
+  if (tab === 'triage') loadAutorunStatus();
   document.getElementById('sidebarTitle').textContent =
     tab === 'triage' ? 'AUT Bugs & Incidents' : 'Tickets with an RCA';
   document.getElementById('searchBox').value = '';
@@ -426,6 +485,7 @@ function renderTicketList() {
       <div class="key">${t.key}</div>
       <div class="summary">${escHtml(t.title || '')}</div>
       <span class="badge ${t.status}">${t.status.replace('_', ' ')}</span>
+      ${t.trigger_source === 'auto' ? '<span class="badge auto" title="Investigated automatically by Auto-RCA">auto</span>' : ''}
       ${currentTab === 'dev' && t.bot_fix_json ? '<span style="margin-left:6px;font-size:10px;font-weight:700;color:#006644;">fix ready</span>' : ''}
     </div>
   `).join('');
@@ -458,7 +518,7 @@ async function selectTicket(key) {
 
     <div class="rca-card" id="rcaCard">
       <h3>
-        <span>${isDev ? 'Dev Agent' : 'Triage Agent RCA'}</span>
+        <span>${isDev ? 'Dev Agent' : 'Triage Agent RCA'}${!isDev && ticket.trigger_source === 'auto' ? ' <span class="badge auto" style="font-size:10px;vertical-align:middle;">auto-generated</span>' : ''}</span>
         <span style="display:flex;gap:8px;align-items:center;">
           ${!isDev && canRerun ? `<button onclick="rerunRca('${ticket.key}')" style="background:none;border:1px solid #dfe1e6;border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;color:#5e6c84;">↺ Re-run</button>` : ''}
         </span>
@@ -927,9 +987,13 @@ async function pollRca(key) {
         tickets[idx].bot_rca_json = JSON.stringify(data.verdict);
         tickets[idx].status = 'rca_ready';
       }
-      if (currentKey === key) { selectTicket(key); renderTicketList(); }
+      // Redraw the list even when this ticket isn't selected — an Auto-RCA run
+      // finishes in the background with nothing selected.
+      renderTicketList();
+      if (currentKey === key) selectTicket(key);
     } else if (data.status === 'failed') {
       if (idx !== -1) { tickets[idx].status = 'failed'; tickets[idx].error = data.error; }
+      renderTicketList();
       if (currentKey === key) selectTicket(key);
     } else {
       setTimeout(() => pollRca(key), 5000);
@@ -1106,6 +1170,128 @@ function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// ---- Auto-RCA (poller) status + settings -----------------------------------
+let autorunTimer = null;
+const autorunPolling = new Set();   // keys we already started pollRca() for
+
+function agoText(iso) {
+  if (!iso) return 'never';
+  const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  return `${Math.round(s / 3600)}h ago`;
+}
+
+async function loadAutorunStatus() {
+  const el = document.getElementById('autorunStatus');
+  if (!el) return;
+  try {
+    const st = await (await fetch('/api/autorun/status')).json();
+    const on = !!st.enabled;
+    const dot = st.last_error ? 'err' : (on ? 'on' : '');
+    const bits = [];
+    bits.push(`<span><span class="dot ${dot}"></span><b>Auto-RCA</b> ${on ? 'ON' : 'OFF'}</span>`);
+    if (on) {
+      if (!st.poller_alive) bits.push('<span style="color:#bf2600;">poller not running</span>');
+      bits.push(`<span>polled ${agoText(st.last_poll_at)}</span>`);
+      bits.push(`<span>${st.runs_today}/${st.daily_cap} today</span>`);
+      if ((st.in_flight || []).length) bits.push(`<span>${st.in_flight.length} running</span>`);
+      if (st.last_skipped_qa) bits.push(`<span title="skipped as QA/non-prod environment">${st.last_skipped_qa} skipped (QA env)</span>`);
+      if (st.state && !['ok', 'disabled'].includes(st.state) && !st.last_error) bits.push(`<span>${escHtml(st.state)}</span>`);
+    }
+    bits.push(`<a onclick="toggleAutorunPanel()">Settings</a>`);
+    if (on && st.poller_alive) bits.push(`<a onclick="autorunPollNow()">Poll now</a>`);
+    if (st.last_error) bits.push(`<span class="err-msg">⚠ ${escHtml(st.last_error)}</span>`);
+    el.innerHTML = bits.join('');
+    // Live pickup: a ticket the poller just started shows as running here without a
+    // manual Refresh, and its verdict lands when the run finishes.
+    for (const key of (st.in_flight || [])) {
+      const idx = tickets.findIndex(t => t.key === key);
+      if (idx !== -1 && tickets[idx].status !== 'running') {
+        tickets[idx].status = 'running'; tickets[idx].trigger_source = 'auto';
+        renderTicketList();
+        if (currentKey === key) selectTicket(key);
+      }
+      if (!autorunPolling.has(key)) { autorunPolling.add(key); setTimeout(() => pollRca(key), 5000); }
+    }
+  } catch (e) {
+    el.innerHTML = `<span><span class="dot err"></span><b>Auto-RCA</b> status unavailable</span> <a onclick="toggleAutorunPanel()">Settings</a>`;
+  }
+}
+
+function startAutorunTimer() {
+  if (autorunTimer) clearInterval(autorunTimer);
+  loadAutorunStatus();
+  autorunTimer = setInterval(() => { if (currentTab === 'triage') loadAutorunStatus(); }, 30000);
+}
+
+async function toggleAutorunPanel(show) {
+  const panel = document.getElementById('autorunPanel');
+  const open = show === undefined ? !panel.classList.contains('show') : show;
+  panel.classList.toggle('show', open);
+  if (!open) return;
+  try {
+    const s = await (await fetch('/api/autorun/settings')).json();
+    document.getElementById('arEnabled').checked = !!s.enabled;
+    document.getElementById('arTypes').innerHTML = (s.work_types || []).map(t =>
+      `<label><input type="checkbox" class="arType" value="${escHtml(t)}" ${(s.allowed_types || []).includes(t) ? 'checked' : ''}> ${escHtml(t)}</label>`).join('');
+    document.getElementById('arInterval').value = s.interval_seconds;
+    document.getElementById('arParallel').value = s.max_parallel;
+    document.getElementById('arDaily').value = s.daily_cap;
+    document.getElementById('arLabels').value = (s.exclude_labels || []).join(', ');
+    document.getElementById('arEnvKw').value = (s.exclude_env_keywords || []).join(', ');
+    document.getElementById('arSince').textContent = s.enabled && s.enabled_at
+      ? `on since ${new Date(s.enabled_at).toLocaleString()}` : '';
+  } catch (e) {
+    showToast('Could not load Auto-RCA settings: ' + e, true);
+  }
+}
+
+async function saveAutorunSettings() {
+  const btn = document.getElementById('arSave');
+  const csv = id => document.getElementById(id).value.split(',').map(x => x.trim()).filter(Boolean);
+  const body = {
+    enabled: document.getElementById('arEnabled').checked,
+    allowed_types: [...document.querySelectorAll('.arType:checked')].map(c => c.value),
+    interval_seconds: parseInt(document.getElementById('arInterval').value, 10),
+    max_parallel: parseInt(document.getElementById('arParallel').value, 10),
+    daily_cap: parseInt(document.getElementById('arDaily').value, 10),
+    exclude_labels: csv('arLabels'),
+    exclude_env_keywords: csv('arEnvKw'),
+  };
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/autorun/settings', {method: 'PUT',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    if (!res.ok) {
+      let msg = await res.text();
+      try { msg = JSON.parse(msg).detail || msg; } catch (e) {}
+      throw new Error(msg);
+    }
+    showToast(body.enabled ? 'Auto-RCA saved — ON' : 'Auto-RCA saved — OFF');
+    toggleAutorunPanel(false);
+    loadAutorunStatus();
+  } catch (e) {
+    showToast('Not saved: ' + e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function autorunPollNow() {
+  try {
+    const res = await fetch('/api/autorun/poll_now', {method: 'POST'});
+    if (!res.ok) throw new Error(await res.text());
+    const st = await res.json();
+    showToast(st.last_error ? 'Poll failed: ' + st.last_error
+        : `Polled — ${st.last_found} found, ${st.last_launched} started`, !!st.last_error);
+    loadAutorunStatus();
+    if (st.last_launched) loadTickets();
+  } catch (e) {
+    showToast('Poll failed: ' + e.message, true);
+  }
+}
+
 // Restore the saved filters across refreshes; on a first visit, default the date
 // range to the last 7 days so the first load is scoped, not "every AUT bug ever".
 (function initDateRange() {
@@ -1133,6 +1319,7 @@ function escHtml(s) {
 
 styleTabs();
 loadTickets();
+startAutorunTimer();
 </script>
 </body>
 </html>
