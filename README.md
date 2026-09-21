@@ -110,7 +110,7 @@ final self-check gate runs before it answers.
 Structured, not an essay ([`schema.py`](rca_agent/schema.py)). Every RCA carries:
 
 - a **VERDICT** — the one-line QA call, derived automatically from cause + confidence:
-  **`BUG Accepted`** (our code/data/infra) · **`Not a BUG`** (customer's own action or a
+  **`Issue Accepted`** (our code/data/infra) · **`Not a BUG`** (customer's own action or a
   government/vendor system) · **`Needs review`** (evidence too thin to commit).
 - **cause categories** (a list): `code · data · infrastructure · third_party · user_side · ux · unknown`
 - **triage**: `real_bug · config · environment · likely_duplicate · insufficient_evidence`

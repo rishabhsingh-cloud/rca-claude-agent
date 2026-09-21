@@ -8,6 +8,10 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "rca_reviews.db"
 
+# Verdict wording changed from "BUG Accepted" to "Issue Accepted"; RCAs stored
+# before that still carry the old label.
+LEGACY_VERDICT = {"BUG Accepted": "Issue Accepted"}
+
 
 @contextmanager
 def _conn():
@@ -281,6 +285,9 @@ def get_quality_stats() -> dict:
             except (ValueError, TypeError):
                 continue
             vl = d.get("verdict_label")
+            # RCAs saved before the rename carry the old wording; count them
+            # under the new one so the stats page shows a single bucket.
+            vl = LEGACY_VERDICT.get(vl, vl)
             if vl:
                 by_verdict[vl] = by_verdict.get(vl, 0) + 1
             for c in (d.get("cause_categories") or []):

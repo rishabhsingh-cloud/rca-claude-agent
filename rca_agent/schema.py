@@ -149,18 +149,18 @@ DISCLAIMER = "Automated RCA — verify before acting"
 
 def verdict_label(v: Verdict) -> str:
     """The one-line QA call, derived automatically from the cause + how sure we
-    are. Returns 'BUG Accepted', 'Not a BUG', or 'Needs review'.
+    are. Returns 'Issue Accepted', 'Not a BUG', or 'Needs review'.
 
     'Needs review' whenever evidence is too thin to commit either way (low
     confidence or insufficient evidence) — we never assert a confident call we
     can't back up. Otherwise: any of our own code/data/infra in the cause means
-    it's our problem ('BUG Accepted'); a customer action or an external/vendor
+    it's our problem ('Issue Accepted'); a customer action or an external/vendor
     (govt/NIC) cause means it's 'Not a BUG'."""
     if v.triage is Triage.INSUFFICIENT_EVIDENCE or v.confidence is Confidence.LOW:
         return "Needs review"
     cats = set(v.cause_categories)
     if cats & {CauseCategory.CODE, CauseCategory.DATA, CauseCategory.INFRASTRUCTURE}:
-        return "BUG Accepted"
+        return "Issue Accepted"
     if cats & {CauseCategory.USER_SIDE, CauseCategory.THIRD_PARTY, CauseCategory.UX}:
         return "Not a BUG"
     return "Needs review"
