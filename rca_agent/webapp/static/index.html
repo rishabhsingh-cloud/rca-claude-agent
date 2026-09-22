@@ -539,6 +539,10 @@ async function selectTicket(key) {
       <button class="reject-btn" id="rejectBtn" onclick="showHumanRca()" ${!hasRca ? 'disabled' : ''}>
         ✗ Reject
       </button>
+      <button class="reject-btn" id="rejectLocalBtn" onclick="rejectRcaLocal()" ${!hasRca ? 'disabled' : ''}
+              title="Mark the bot's RCA as wrong without posting anything to Jira. Text in 'Your RCA' is kept locally.">
+        ✗ Reject (don't post)
+      </button>
     </div>
 
     <div class="human-rca-box show" id="humanRcaBox">
@@ -554,7 +558,8 @@ async function selectTicket(key) {
     </div>
     ` : `
     <div class="card" style="border-color:${ticket.status==='accepted'?'#36b37e':'#ff5630'}">
-      <h3>${ticket.status === 'accepted' ? '✓ Accepted' : '✗ Rejected — Human RCA posted'}</h3>
+      <h3>${ticket.status === 'accepted' ? '✓ Accepted'
+            : ticket.comment_id ? '✗ Rejected — Human RCA posted' : '✗ Rejected — not posted to Jira'}</h3>
       ${ticket.human_rca ? `<div class="value">${escHtml(ticket.human_rca)}</div>` : ''}
     </div>
     `}
@@ -1039,9 +1044,42 @@ async function acceptRca() {
   }
 }
 
+// Local-only reject: mark the bot's RCA wrong without posting to Jira (mirror of
+// acceptRca). Whatever is in the "Your RCA" box is kept as the local record.
+async function rejectRcaLocal() {
+  const key = currentKey;
+  const box = document.getElementById('humanRcaText');
+  const text = box ? box.value.trim() : '';
+  setActionBtns(true);
+  try {
+    const res = await fetch(`/api/tickets/${key}/reject_local`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({human_rca: text})
+    });
+    const d = await safeJson(res);
+    if (!res.ok) throw new Error(d.detail || 'Could not reject');
+    const idx = tickets.findIndex(t => t.key === key);
+    if (idx !== -1) {
+      tickets[idx].status = 'rejected';
+      tickets[idx].human_rca = text;
+      tickets[idx].comment_id = '';
+      if (text) tickets[idx].human_rca_draft = text;
+    }
+    showToast('✗ Rejected (not posted to Jira)');
+    if (currentKey === key) selectTicket(key);
+    renderTicketList();
+    loadScoreboard();
+  } catch(e) {
+    showToast('Error: ' + e.message, true);
+    setActionBtns(false);
+  }
+}
+
 // Poll a backgrounded accept/reject job to completion, then apply the UI change.
 // `kind` is the job we started, so we don't latch onto a different in-flight job.
-// onDone() updates the in-memory ticket for the final status.
+// onDone(result) updates the in-memory ticket for the final status; `result` is the
+// job's stored payload (e.g. {comment_id}).
 async function pollDecision(key, kind, successMsg, onDone) {
   try {
     const r = await fetch(`/api/tickets/${key}/job`);
@@ -1051,7 +1089,7 @@ async function pollDecision(key, kind, successMsg, onDone) {
       return;
     }
     if (j.kind === kind && j.status === 'done') {
-      onDone();
+      onDone(j.result);
       showToast(successMsg);
       if (currentKey === key) selectTicket(key);
       renderTicketList();
@@ -1112,9 +1150,15 @@ async function postHumanRca() {
       setActionBtns(false);
       return;
     }
-    pollDecision(key, 'reject', 'Human RCA posted to Jira', () => {
+    pollDecision(key, 'reject', 'Human RCA posted to Jira', (result) => {
       const idx = tickets.findIndex(t => t.key === key);
-      if (idx !== -1) { tickets[idx].status = 'rejected'; tickets[idx].human_rca = text; }
+      if (idx !== -1) {
+        tickets[idx].status = 'rejected';
+        tickets[idx].human_rca = text;
+        // Drives the decided-card heading ("Human RCA posted" vs "not posted").
+        tickets[idx].comment_id = (result && result.comment_id) || '';
+        tickets[idx].human_rca_draft = null;  // server cleared it on post
+      }
     });
   } catch(e) {
     showToast('Error: ' + e.message, true);
@@ -1152,7 +1196,7 @@ async function loadScoreboard() {
 }
 
 function setActionBtns(disabled) {
-  ['acceptBtn', 'acceptPostBtn', 'rejectBtn'].forEach(id => {
+  ['acceptBtn', 'acceptPostBtn', 'rejectBtn', 'rejectLocalBtn'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.disabled = disabled;
   });

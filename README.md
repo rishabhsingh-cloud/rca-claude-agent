@@ -184,8 +184,10 @@ A FastAPI app ([`webapp/app.py`](rca_agent/webapp/app.py)) with a SQLite store
 
 - **Triage tab** — lists Jira tickets (filter by date range + **work type**), pick one to run an
   RCA (`POST /api/tickets/{key}/rca`, background thread, ~3–4 min).
-- **RCA review** — the verdict, evidence chain, and attachments; **Accept**, **Reject** (with a
-  human correction), or **Accept & post to Jira** (add-only comment; never edits/deletes).
+- **RCA review** — the verdict, evidence chain, and attachments; **Accept** (local only),
+  **Accept & post to Jira** (add-only comment; never edits/deletes), **Reject** → write a human
+  correction and **Post Human RCA to Jira**, or **Reject (don't post)** — records the miss locally
+  (keeps any text you typed) without touching Jira. Both kinds of reject count in Quality.
 - **Quality tab** (`/api/quality`) — accuracy scoreboard: accept/reject counts, breakdown *by
   verdict* and *by cause bucket*.
 - **Fix flow** — **Suggest a fix** (dry-run diff), then optionally **Raise MR** (draft) or **Reject
@@ -207,6 +209,7 @@ A FastAPI app ([`webapp/app.py`](rca_agent/webapp/app.py)) with a SQLite store
 
 Selected endpoints: `GET /api/tickets`, `POST /api/tickets/{key}/rca`,
 `POST /api/tickets/{key}/accept[_and_post]`, `POST /api/tickets/{key}/reject`,
+`POST /api/tickets/{key}/reject_local`,
 `POST /api/tickets/{key}/suggest_fix`, `POST /api/tickets/{key}/raise_mr`, `GET /api/quality`,
 `GET|PUT /api/autorun/settings`, `GET /api/autorun/status`, `POST /api/autorun/poll_now`.
 

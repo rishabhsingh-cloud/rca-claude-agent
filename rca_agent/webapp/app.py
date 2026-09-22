@@ -439,6 +439,19 @@ class SaveHumanRcaRequest(BaseModel):
     text: str
 
 
+class RejectLocalRequest(BaseModel):
+    human_rca: str = ""
+
+
+def _refuse_if_posting(ticket: dict) -> None:
+    """A local decision must not race a Jira post still running in the background —
+    the thread would overwrite it when it finishes (`mark_accepted` / `mark_rejected`).
+    The UI disables the buttons while polling, but a page refresh re-enables them."""
+    if (ticket.get("job_status") == "running"
+            and ticket.get("job_kind") in ("accept_post", "reject")):
+        raise HTTPException(409, "A Jira post for this ticket is still running — wait for it")
+
+
 @app.post("/api/tickets/{key}/save_human_rca")
 def save_human_rca(key: str, body: SaveHumanRcaRequest):
     """Save a human-written RCA locally WITHOUT posting to Jira (QA drafts now, posts
@@ -461,8 +474,28 @@ def accept(key: str):
         raise HTTPException(400, "No RCA found for this ticket — run RCA first")
     if ticket["status"] in ("accepted", "rejected"):
         raise HTTPException(400, "Already reviewed")
+    _refuse_if_posting(ticket)
     store.mark_accepted(key, "")
     return {"status": "accepted"}
+
+
+@app.post("/api/tickets/{key}/reject_local")
+def reject_local(key: str, body: RejectLocalRequest):
+    """Mark the bot's RCA as wrong locally WITHOUT posting to Jira (mirror of /accept).
+    Whatever the reviewer typed in "Your RCA" is kept as the record (optional): it
+    becomes `human_rca` and is also stored as the draft, since the draft is only
+    cleared once a human RCA is actually posted — so it re-surfaces after a re-run."""
+    ticket = store.get_ticket(key)
+    if not ticket or not ticket.get("bot_rca_json"):
+        raise HTTPException(400, "No RCA found for this ticket — run RCA first")
+    if ticket["status"] in ("accepted", "rejected"):
+        raise HTTPException(400, "Already reviewed")
+    _refuse_if_posting(ticket)
+    text = body.human_rca.strip()
+    if text:
+        store.save_human_rca_draft(key, text)
+    store.mark_rejected(key, text, "")
+    return {"status": "rejected"}
 
 
 def _accept_and_post_background(key: str) -> None:
