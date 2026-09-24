@@ -2,6 +2,8 @@
 the miss without ever touching Jira, mirror `/accept`'s guards, and count in Quality."""
 from __future__ import annotations
 
+import json
+
 import pytest
 
 pytest.importorskip("fastapi")  # webapp extra; skip where only .[dev] is installed
@@ -93,16 +95,17 @@ def test_reject_local_refuses_already_reviewed(client):
     assert db.get_ticket(KEY)["status"] == "accepted"
 
 
-@pytest.mark.parametrize("route", ["reject_local", "accept"])
+@pytest.mark.parametrize("route", ["reject_local", "accept", "unclear"])
 def test_local_decision_waits_for_in_flight_jira_post(client, route):
     c, _ = client
     _seed_with_rca()
     assert db.start_job(KEY, "reject")  # a Jira post is running in the background
-    r = c.post(f"/api/tickets/{KEY}/{route}", json={"human_rca": "x"})
+    body = {"human_rca": "x", "reasons": ["too_long"]}
+    r = c.post(f"/api/tickets/{KEY}/{route}", json=body)
     assert r.status_code == 409
     assert db.get_ticket(KEY)["status"] == "rca_ready"
     db.finish_job(KEY)
-    assert c.post(f"/api/tickets/{KEY}/{route}", json={"human_rca": "x"}).status_code == 200
+    assert c.post(f"/api/tickets/{KEY}/{route}", json=body).status_code == 200
 
 
 def test_reject_local_counts_in_quality(client):
@@ -121,3 +124,102 @@ def test_posting_reject_still_requires_text(client):
     _seed_with_rca()
     r = c.post(f"/api/tickets/{KEY}/reject", json={"human_rca": "  "})
     assert r.status_code == 400 and fake.calls == []
+
+
+# --- "Not able to understand" (POST /unclear): local-only, never touches Jira ------
+
+UNCLEAR = {"reasons": ["too_technical"]}
+
+
+def test_unclear_records_reasons_and_note_without_jira(client):
+    c, fake = client
+    _seed_with_rca()
+    r = c.post(f"/api/tickets/{KEY}/unclear",
+               json={"note": "  jargon in para 2  ",
+                     "reasons": ["too_technical", "too_long", "too_technical"]})
+    assert r.status_code == 200 and r.json() == {"status": "unclear"}
+    row = db.get_ticket(KEY)
+    assert row["status"] == "unclear"
+    assert row["review_note"] == "jargon in para 2"
+    assert json.loads(row["unclear_reasons"]) == ["too_technical", "too_long"]  # de-duped
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize("body", [{"note": "only text"}, {"reasons": ["too_long"]}])
+def test_unclear_needs_a_reason_or_a_note_not_both(client, body):
+    c, _ = client
+    _seed_with_rca()
+    assert c.post(f"/api/tickets/{KEY}/unclear", json=body).status_code == 200
+
+
+@pytest.mark.parametrize("body", [{}, {"note": "   ", "reasons": []}])
+def test_unclear_refuses_empty_feedback(client, body):
+    c, _ = client
+    _seed_with_rca()
+    r = c.post(f"/api/tickets/{KEY}/unclear", json=body)
+    assert r.status_code == 400 and "at least one reason" in r.json()["detail"]
+    assert db.get_ticket(KEY)["status"] == "rca_ready"
+
+
+def test_unclear_rejects_unknown_reason(client):
+    c, _ = client
+    _seed_with_rca()
+    r = c.post(f"/api/tickets/{KEY}/unclear", json={"reasons": ["nope"]})
+    assert r.status_code == 400 and "Unknown reason" in r.json()["detail"]
+
+
+def test_unclear_requires_an_rca(client):
+    c, _ = client
+    db.upsert_ticket(KEY, "title", "desc", "2026-09-01T00:00:00.000+0530")
+    r = c.post(f"/api/tickets/{KEY}/unclear", json=UNCLEAR)
+    assert r.status_code == 400 and "run RCA first" in r.json()["detail"]
+
+
+def test_unclear_refuses_already_reviewed(client):
+    c, _ = client
+    _seed_with_rca()
+    db.mark_accepted(KEY, "")
+    r = c.post(f"/api/tickets/{KEY}/unclear", json=UNCLEAR)
+    assert r.status_code == 400 and r.json()["detail"] == "Already reviewed"
+    assert db.get_ticket(KEY)["status"] == "accepted"
+
+
+@pytest.mark.parametrize("route,body", [
+    ("accept", None), ("accept_and_post", None), ("reject_local", {}),
+    ("reject", {"human_rca": "x"}), ("save_human_rca", {"text": "x"}),
+])
+def test_unclear_blocks_other_decisions(client, route, body):
+    c, fake = client
+    _seed_with_rca()
+    assert c.post(f"/api/tickets/{KEY}/unclear", json=UNCLEAR).status_code == 200
+    r = c.post(f"/api/tickets/{KEY}/{route}", json=body)
+    assert r.status_code == 400
+    assert db.get_ticket(KEY)["status"] == "unclear"
+    assert fake.calls == []
+
+
+def test_unclear_feedback_shows_in_quality(client):
+    c, _ = client
+    _seed_with_rca()
+    c.post(f"/api/tickets/{KEY}/unclear",
+           json={"note": "lost me", "reasons": ["too_long", "no_clear_answer"]})
+    q = c.get("/api/quality").json()
+    assert (q["unclear"], q["accepted"], q["rejected"], q["reviewed"]) == (1, 0, 0, 1)
+    assert q["by_unclear_reason"]["too_long"] == 1
+    assert q["by_unclear_reason"]["too_technical"] == 0   # every reason listed, even at 0
+    [n] = q["unclear_notes"]
+    assert n["key"] == KEY and n["note"] == "lost me"
+    assert n["reasons"] == [db.UNCLEAR_REASONS["too_long"], db.UNCLEAR_REASONS["no_clear_answer"]]
+
+
+def test_unclear_reasons_endpoint(client):
+    c, _ = client
+    assert c.get("/api/unclear_reasons").json() == db.UNCLEAR_REASONS
+
+
+def test_reset_reopens_unclear_ticket(client):
+    c, _ = client
+    _seed_with_rca()
+    c.post(f"/api/tickets/{KEY}/unclear", json=UNCLEAR)
+    c.post(f"/api/tickets/{KEY}/reset")
+    assert db.get_ticket(KEY)["status"] == "pending"

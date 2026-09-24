@@ -16,6 +16,21 @@ IST = timezone(timedelta(hours=5, minutes=30))
 # before that still carry the old label.
 LEGACY_VERDICT = {"BUG Accepted": "Issue Accepted"}
 
+# Statuses meaning "a human already decided on this RCA". 'unclear' = the reviewer
+# could not understand the RCA (recorded locally, never posted to Jira).
+DECIDED_STATUSES = ("accepted", "rejected", "unclear")
+
+# Tick-box reasons offered in the "What was unclear?" section. Stored as a JSON list
+# so the Quality tab can count them — the data for improving RCA wording later.
+UNCLEAR_REASONS = {
+    "too_technical":    "Too technical / jargon",
+    "too_long":         "Too long to follow",
+    "no_clear_answer":  "No clear answer on what went wrong",
+    "next_step_unclear": "Not clear what to do next",
+    "contradictory":    "Confusing or contradicts itself",
+    "wrong_area":       "Talks about the wrong area / feature",
+}
+
 
 @contextmanager
 def _conn():
@@ -77,7 +92,10 @@ def init_db() -> None:
                     # UTC time of the first AUTOMATIC claim. auto_run_at is set once and
                     # never cleared (not by /reset, not by failure) — it is the poller's
                     # idempotency marker, so a ticket is auto-run at most once, ever.
-                    "trigger_source TEXT", "auto_run_at TEXT"):
+                    "trigger_source TEXT", "auto_run_at TEXT",
+                    # Optional reviewer note for a "Not able to understand" decision
+                    # (what was unclear) — feeds RCA-wording improvements.
+                    "review_note TEXT", "unclear_reasons TEXT"):
             try:
                 con.execute(f"ALTER TABLE reviews ADD COLUMN {col}")
             except sqlite3.OperationalError:
@@ -349,6 +367,14 @@ def mark_rejected(key: str, human_rca: str, comment_id: str) -> None:
         """, (human_rca, comment_id, key))
 
 
+def mark_unclear(key: str, note: str, reasons: list[str]) -> None:
+    with _conn() as con:
+        con.execute("""
+            UPDATE reviews SET status = 'unclear', review_note = ?, unclear_reasons = ?,
+            updated_at = datetime('now') WHERE key = ?
+        """, (note, json.dumps(reasons), key))
+
+
 def get_scoreboard() -> dict:
     with _conn() as con:
         total = con.execute(
@@ -370,16 +396,31 @@ def get_quality_stats() -> dict:
     accept/reject outcomes + the agent's own VERDICT and cause-bucket distribution
     across every ticket that has an RCA."""
     with _conn() as con:
-        rows = con.execute("SELECT status, bot_rca_json FROM reviews").fetchall()
+        rows = con.execute("SELECT key, status, bot_rca_json, review_note, unclear_reasons, "
+                           "updated_at FROM reviews").fetchall()
     total = len(rows)
-    accepted = rejected = with_rca = 0
+    accepted = rejected = unclear = with_rca = 0
     by_verdict: dict[str, int] = {}
     by_cause: dict[str, int] = {}
+    by_unclear_reason: dict[str, int] = {k: 0 for k in UNCLEAR_REASONS}
+    unclear_notes: list[dict] = []
     for r in rows:
         if r["status"] == "accepted":
             accepted += 1
         elif r["status"] == "rejected":
             rejected += 1
+        elif r["status"] == "unclear":
+            unclear += 1
+            try:
+                reasons = json.loads(r["unclear_reasons"] or "[]")
+            except (ValueError, TypeError):
+                reasons = []
+            for k in reasons:
+                if k in by_unclear_reason:
+                    by_unclear_reason[k] += 1
+            unclear_notes.append({"key": r["key"], "note": r["review_note"] or "",
+                                  "reasons": [UNCLEAR_REASONS.get(k, k) for k in reasons],
+                                  "at": r["updated_at"]})
         if r["bot_rca_json"]:
             with_rca += 1
             try:
@@ -394,6 +435,9 @@ def get_quality_stats() -> dict:
                 by_verdict[vl] = by_verdict.get(vl, 0) + 1
             for c in (d.get("cause_categories") or []):
                 by_cause[c] = by_cause.get(c, 0) + 1
-    return {"total": total, "with_rca": with_rca, "reviewed": accepted + rejected,
-            "accepted": accepted, "rejected": rejected,
-            "by_verdict": by_verdict, "by_cause": by_cause}
+    return {"total": total, "with_rca": with_rca, "reviewed": accepted + rejected + unclear,
+            "accepted": accepted, "rejected": rejected, "unclear": unclear,
+            "by_verdict": by_verdict, "by_cause": by_cause,
+            "unclear_reasons": UNCLEAR_REASONS, "by_unclear_reason": by_unclear_reason,
+            # Newest first; every "Not able to understand" with its reasons + note.
+            "unclear_notes": sorted(unclear_notes, key=lambda n: n["at"] or "", reverse=True)}

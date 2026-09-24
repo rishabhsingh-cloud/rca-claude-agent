@@ -443,6 +443,11 @@ class RejectLocalRequest(BaseModel):
     human_rca: str = ""
 
 
+class UnclearRequest(BaseModel):
+    note: str = ""
+    reasons: list[str] = []
+
+
 def _refuse_if_posting(ticket: dict) -> None:
     """A local decision must not race a Jira post still running in the background —
     the thread would overwrite it when it finishes (`mark_accepted` / `mark_rejected`).
@@ -460,7 +465,7 @@ def save_human_rca(key: str, body: SaveHumanRcaRequest):
     ticket = store.get_ticket(key)
     if not ticket:
         raise HTTPException(404, "Ticket not found")
-    if ticket["status"] in ("accepted", "rejected"):
+    if ticket["status"] in store.DECIDED_STATUSES:
         raise HTTPException(400, "Already reviewed — nothing to draft")
     store.save_human_rca_draft(key, body.text)
     return {"status": "saved"}
@@ -472,7 +477,7 @@ def accept(key: str):
     ticket = store.get_ticket(key)
     if not ticket or not ticket.get("bot_rca_json"):
         raise HTTPException(400, "No RCA found for this ticket — run RCA first")
-    if ticket["status"] in ("accepted", "rejected"):
+    if ticket["status"] in store.DECIDED_STATUSES:
         raise HTTPException(400, "Already reviewed")
     _refuse_if_posting(ticket)
     store.mark_accepted(key, "")
@@ -488,7 +493,7 @@ def reject_local(key: str, body: RejectLocalRequest):
     ticket = store.get_ticket(key)
     if not ticket or not ticket.get("bot_rca_json"):
         raise HTTPException(400, "No RCA found for this ticket — run RCA first")
-    if ticket["status"] in ("accepted", "rejected"):
+    if ticket["status"] in store.DECIDED_STATUSES:
         raise HTTPException(400, "Already reviewed")
     _refuse_if_posting(ticket)
     text = body.human_rca.strip()
@@ -496,6 +501,30 @@ def reject_local(key: str, body: RejectLocalRequest):
         store.save_human_rca_draft(key, text)
     store.mark_rejected(key, text, "")
     return {"status": "rejected"}
+
+
+@app.post("/api/tickets/{key}/unclear")
+def mark_unclear(key: str, body: UnclearRequest):
+    """"Not able to understand": the reviewer could not follow the bot's RCA. Recorded
+    locally only (never posted to Jira) with WHAT was unclear — tick-box reasons
+    (db.UNCLEAR_REASONS) and/or a free-text note, at least one of them — so the Quality
+    tab can surface RCAs whose wording needs work. Same guards as /reject_local;
+    Re-run reopens it like any other decision."""
+    note = body.note.strip()
+    bad = [r for r in body.reasons if r not in store.UNCLEAR_REASONS]
+    if bad:
+        raise HTTPException(400, f"Unknown reason(s): {bad}")
+    reasons = list(dict.fromkeys(body.reasons))  # de-dupe, keep order
+    if not note and not reasons:
+        raise HTTPException(400, "Tick at least one reason or write what was unclear")
+    ticket = store.get_ticket(key)
+    if not ticket or not ticket.get("bot_rca_json"):
+        raise HTTPException(400, "No RCA found for this ticket — run RCA first")
+    if ticket["status"] in store.DECIDED_STATUSES:
+        raise HTTPException(400, "Already reviewed")
+    _refuse_if_posting(ticket)
+    store.mark_unclear(key, note, reasons)
+    return {"status": "unclear"}
 
 
 def _accept_and_post_background(key: str) -> None:
@@ -523,7 +552,7 @@ def accept_and_post(key: str):
     ticket = store.get_ticket(key)
     if not ticket or not ticket.get("bot_rca_json"):
         raise HTTPException(400, "No RCA found for this ticket — run RCA first")
-    if ticket["status"] in ("accepted", "rejected"):
+    if ticket["status"] in store.DECIDED_STATUSES:
         raise HTTPException(400, "Already reviewed")
     if not store.start_job(key, "accept_post"):
         return {"status": "already_running"}
@@ -565,7 +594,7 @@ def reject(key: str, body: RejectRequest):
     if not body.human_rca.strip():
         raise HTTPException(400, "Human RCA cannot be empty")
     ticket = store.get_ticket(key)
-    if ticket and ticket["status"] in ("accepted", "rejected"):
+    if ticket and ticket["status"] in store.DECIDED_STATUSES:
         raise HTTPException(400, "Already reviewed")
     if not store.start_job(key, "reject"):
         return {"status": "already_running"}
@@ -633,6 +662,12 @@ def autorun_poll_now():
                                  "(RCA_AUTORUN_POLLER=0?)")
     p.run_once()
     return autorun_status()
+
+
+@app.get("/api/unclear_reasons")
+def unclear_reasons():
+    """Tick-box reasons for the "What was unclear?" section ({id: label})."""
+    return store.UNCLEAR_REASONS
 
 
 @app.get("/api/scoreboard")

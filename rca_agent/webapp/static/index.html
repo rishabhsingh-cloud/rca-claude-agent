@@ -52,6 +52,7 @@
   .badge.rca_ready { background: #fff0b3; color: #974f0c; }
   .badge.accepted  { background: #e3fcef; color: #006644; }
   .badge.rejected  { background: #ffebe6; color: #bf2600; }
+  .badge.unclear   { background: #fffae6; color: #974f0c; }
   .badge.auto      { background: #eae6ff; color: #403294; margin-left: 4px; }
 
   /* Auto-RCA (poller) status + settings, in the Triage sidebar */
@@ -126,6 +127,16 @@
   .accept-btn:disabled, .reject-btn:disabled { opacity: .5; cursor: not-allowed; }
 
   /* Human RCA box */
+  .unclear-box { border: 1px solid #ffe2bd; background: #fffcf5; }
+  .unclear-box.flash { box-shadow: 0 0 0 3px #ffc400; }
+  .unclear-box .reasons { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 6px 14px; margin-bottom: 10px; font-size: 13px; color: #172b4d; }
+  .unclear-box .reasons label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  .unclear-box .reasons input { width: auto; }
+  .unclear-box textarea { width: 100%; min-height: 80px; padding: 10px; border: 1px solid #dfe1e6;
+    border-radius: 4px; font-size: 14px; font-family: inherit; resize: vertical; }
+  .unclear-chip { display: inline-block; padding: 2px 8px; margin: 0 6px 6px 0; border-radius: 10px;
+    background: #fff0b3; color: #974f0c; font-size: 12px; font-weight: 600; }
   .human-rca-box { display: none; flex-direction: column; gap: 10px; }
   .human-rca-box.show { display: flex; }
   .human-rca-box textarea { width: 100%; min-height: 120px; padding: 10px;
@@ -271,6 +282,10 @@
 let currentKey = null;
 let tickets = [];
 let currentTab = 'triage';   // 'triage' | 'dev'
+// Reason ids -> labels, served by /api/unclear_reasons (single source: db.py).
+let UNCLEAR_REASONS = {};
+const unclearReasonsReady = fetch('/api/unclear_reasons').then(r => r.json())
+  .then(d => { UNCLEAR_REASONS = d || {}; }).catch(() => {});
 
 function styleTabs() {
   for (const [id, tab] of [['tab-triage', 'triage'], ['tab-dev', 'dev'], ['tab-quality', 'quality']]) {
@@ -331,6 +346,7 @@ function renderQuality(s) {
   const reviewed = s.reviewed || 0;
   const accPct = reviewed ? Math.round(s.accepted / reviewed * 100) : 0;
   const rejPct = reviewed ? Math.round(s.rejected / reviewed * 100) : 0;
+  const uncPct = reviewed ? Math.round((s.unclear || 0) / reviewed * 100) : 0;
   let h = `<div class="card"><h3>RCA quality</h3>
     <div style="font-size:13px;color:#5e6c84;margin-bottom:14px;">${s.with_rca} tickets have an RCA · ${reviewed} reviewed by a human</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;">
@@ -342,6 +358,10 @@ function renderQuality(s) {
         <div style="color:#bf2600;font-size:13px;font-weight:600;">✗ Rejected</div>
         <div style="font-size:28px;font-weight:700;color:#bf2600;margin:4px 0;">${s.rejected}</div>
         ${qbar(rejPct, '#bf2600')}<div style="font-size:12px;color:#bf2600;margin-top:4px;">${rejPct}% of reviewed</div></div>
+      <div style="background:#fffae6;border-radius:12px;padding:14px;">
+        <div style="color:#974f0c;font-size:13px;font-weight:600;">? Not understood</div>
+        <div style="font-size:28px;font-weight:700;color:#974f0c;margin:4px 0;">${s.unclear || 0}</div>
+        ${qbar(uncPct, '#974f0c')}<div style="font-size:12px;color:#974f0c;margin-top:4px;">${uncPct}% of reviewed</div></div>
     </div></div>`;
 
   const vColor = {'Issue Accepted': '#bf2600', 'Not a BUG': '#006644', 'Needs review': '#974f0c'};
@@ -368,6 +388,27 @@ function renderQuality(s) {
   h += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
     <div class="card"><h3>By verdict</h3>${vh}</div>
     <div class="card"><h3>By cause bucket</h3>${ch}</div>
+  </div>`;
+
+  // Why reviewers could not understand RCAs — the data for improving the wording.
+  const ur = s.by_unclear_reason || {}, labels = s.unclear_reasons || {};
+  const maxU = Math.max(1, ...Object.values(ur));
+  let uh = '';
+  Object.keys(labels).forEach(k => {
+    const n = ur[k] || 0;
+    uh += `<div style="margin-bottom:10px;"><div style="display:flex;justify-content:space-between;font-size:13px;color:#172b4d;"><span>${escHtml(labels[k])}</span><span style="color:#5e6c84;">${n}</span></div>${qbar(n / maxU * 100, '#974f0c')}</div>`;
+  });
+  const notes = s.unclear_notes || [];
+  const nh = notes.length
+    ? notes.map(n => `<div style="border-top:1px solid #f4f5f7;padding:8px 0;font-size:13px;">
+        <div style="font-weight:600;color:#0052cc;margin-bottom:4px;">${escHtml(n.key)}</div>
+        ${(n.reasons || []).map(r => `<span class="unclear-chip">${escHtml(r)}</span>`).join('')}
+        ${n.note ? `<div style="color:#172b4d;">${escHtml(n.note)}</div>` : ''}
+      </div>`).join('')
+    : '<div style="font-size:13px;color:#5e6c84;">No "Not able to understand" feedback yet.</div>';
+  h += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+    <div class="card"><h3>Why RCAs were not understood</h3>${uh}</div>
+    <div class="card"><h3>Reviewer notes (${notes.length})</h3><div style="max-height:360px;overflow:auto;">${nh}</div></div>
   </div>`;
   return h;
 }
@@ -493,11 +534,12 @@ function renderTicketList() {
 
 async function selectTicket(key) {
   currentKey = key;
+  await unclearReasonsReady;  // the "What was unclear?" tick-boxes need the labels
   renderTicketList();
   const ticket = tickets.find(t => t.key === key);
   if (!ticket) return;
 
-  const alreadyDone = ticket.status === 'accepted' || ticket.status === 'rejected';
+  const alreadyDone = ['accepted', 'rejected', 'unclear'].includes(ticket.status);
   const isDev = currentTab === 'dev';
   const hasRca = ticket.bot_rca_json || ticket.status === 'rca_ready';
   // Re-run is available in every state except while an investigation is in flight
@@ -543,6 +585,11 @@ async function selectTicket(key) {
               title="Mark the bot's RCA as wrong without posting anything to Jira. Text in 'Your RCA' is kept locally.">
         ✗ Reject (don't post)
       </button>
+      <button class="reject-btn" id="unclearBtn" onclick="showUnclearBox()" ${!hasRca ? 'disabled' : ''}
+              style="color:#974f0c;border-color:#ff991f;"
+              title="The RCA is not clear enough to judge. Opens the 'What was unclear?' section below — nothing is posted to Jira.">
+        ? Not able to understand
+      </button>
     </div>
 
     <div class="human-rca-box show" id="humanRcaBox">
@@ -556,12 +603,32 @@ async function selectTicket(key) {
         </div>
       </div>
     </div>
+
+    <div class="card unclear-box" id="unclearBox" style="display:none;">
+      <h3>What was unclear? <span style="font-weight:400;font-size:13px;color:#6b778c;">(use this when you can't judge the RCA — saved here only, never posted to Jira)</span></h3>
+      <div class="reasons">
+        ${Object.entries(UNCLEAR_REASONS).map(([id, label]) =>
+          `<label><input type="checkbox" class="unclear-reason" value="${id}"> ${escHtml(label)}</label>`).join('')}
+      </div>
+      <textarea id="unclearNote" placeholder="Tell us in your own words what was hard to understand (e.g. which part, which words)…"></textarea>
+      <div style="margin-top:10px;display:flex;gap:8px;align-items:center;">
+        <button id="unclearSubmitBtn" onclick="markUnclear()" style="background:#ff991f;color:#172b4d;border:none;border-radius:4px;padding:8px 16px;font-size:14px;font-weight:600;cursor:pointer;">? Submit — Not able to understand</button>
+        <button onclick="hideUnclearBox()" style="background:none;border:1px solid #dfe1e6;border-radius:4px;padding:8px 14px;font-size:14px;cursor:pointer;color:#5e6c84;">Cancel</button>
+        <span style="font-size:12px;color:#6b778c;">Tick at least one reason or write a note.</span>
+      </div>
+    </div>
     ` : `
+    ${ticket.status === 'unclear' ? `
+    <div class="card" style="border-color:#ff991f">
+      <h3>? Not able to understand — not posted to Jira</h3>
+      ${unclearReasonChips(ticket.unclear_reasons)}
+      ${ticket.review_note ? `<div class="value">${escHtml(ticket.review_note)}</div>` : ''}
+    </div>` : `
     <div class="card" style="border-color:${ticket.status==='accepted'?'#36b37e':'#ff5630'}">
       <h3>${ticket.status === 'accepted' ? '✓ Accepted'
             : ticket.comment_id ? '✗ Rejected — Human RCA posted' : '✗ Rejected — not posted to Jira'}</h3>
       ${ticket.human_rca ? `<div class="value">${escHtml(ticket.human_rca)}</div>` : ''}
-    </div>
+    </div>`}
     `}
   `;
 
@@ -1014,7 +1081,7 @@ async function rerunRca(key) {
   // Re-running a ticket a human already decided on reopens it for review and
   // replaces the bot RCA. It does NOT undo anything already posted to Jira, so
   // make the reopen deliberate.
-  if ((st === 'accepted' || st === 'rejected') &&
+  if (['accepted', 'rejected', 'unclear'].includes(st) &&
       !confirm('This ticket already has a human decision. Re-running generates a new RCA '
              + 'and reopens it for review — it does not change what was already posted to '
              + 'Jira. Continue?')) {
@@ -1067,6 +1134,67 @@ async function rejectRcaLocal() {
       if (text) tickets[idx].human_rca_draft = text;
     }
     showToast('✗ Rejected (not posted to Jira)');
+    if (currentKey === key) selectTicket(key);
+    renderTicketList();
+    loadScoreboard();
+  } catch(e) {
+    showToast('Error: ' + e.message, true);
+    setActionBtns(false);
+  }
+}
+
+// "Not able to understand": the RCA wasn't clear enough to judge. Local only — never
+// posted to Jira. The optional note says what was unclear (for improving RCAs).
+
+function unclearReasonChips(raw) {
+  let ids = [];
+  try { ids = JSON.parse(raw || '[]'); } catch (e) {}
+  return ids.length
+    ? `<div style="margin-bottom:6px;">${ids.map(id =>
+        `<span class="unclear-chip">${escHtml(UNCLEAR_REASONS[id] || id)}</span>`).join('')}</div>`
+    : '';
+}
+
+// Hidden until the reviewer clicks "? Not able to understand"; Cancel hides it again.
+function showUnclearBox() {
+  const box = document.getElementById('unclearBox');
+  if (!box) return;
+  box.style.display = '';
+  box.scrollIntoView({behavior: 'smooth', block: 'center'});
+  box.classList.add('flash');
+  setTimeout(() => box.classList.remove('flash'), 1200);
+}
+
+function hideUnclearBox() {
+  const box = document.getElementById('unclearBox');
+  if (box) box.style.display = 'none';
+}
+
+async function markUnclear() {
+  const key = currentKey;
+  const reasons = [...document.querySelectorAll('.unclear-reason:checked')].map(c => c.value);
+  const note = (document.getElementById('unclearNote').value || '').trim();
+  if (!reasons.length && !note) {
+    showToast('Tick at least one reason or write what was unclear', true);
+    showUnclearBox();
+    return;
+  }
+  setActionBtns(true);
+  try {
+    const res = await fetch(`/api/tickets/${key}/unclear`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({note, reasons})
+    });
+    const d = await safeJson(res);
+    if (!res.ok) throw new Error(d.detail || 'Could not save');
+    const idx = tickets.findIndex(t => t.key === key);
+    if (idx !== -1) {
+      tickets[idx].status = 'unclear';
+      tickets[idx].review_note = note;
+      tickets[idx].unclear_reasons = JSON.stringify(reasons);
+    }
+    showToast('? Marked "Not able to understand" (not posted to Jira)');
     if (currentKey === key) selectTicket(key);
     renderTicketList();
     loadScoreboard();
@@ -1196,7 +1324,7 @@ async function loadScoreboard() {
 }
 
 function setActionBtns(disabled) {
-  ['acceptBtn', 'acceptPostBtn', 'rejectBtn', 'rejectLocalBtn'].forEach(id => {
+  ['acceptBtn', 'acceptPostBtn', 'rejectBtn', 'rejectLocalBtn', 'unclearBtn', 'unclearSubmitBtn'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.disabled = disabled;
   });
