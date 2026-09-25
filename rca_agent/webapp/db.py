@@ -95,11 +95,21 @@ def init_db() -> None:
                     "trigger_source TEXT", "auto_run_at TEXT",
                     # Optional reviewer note for a "Not able to understand" decision
                     # (what was unclear) — feeds RCA-wording improvements.
-                    "review_note TEXT", "unclear_reasons TEXT"):
+                    "review_note TEXT", "unclear_reasons TEXT",
+                    # Triage list membership. on_dashboard is set once (the ticket was
+                    # synced while a Bug/Incident) and never cleared, so a ticket
+                    # stays listed after Jira changes its type or closes it.
+                    # issue_type / jira_status / jira_done are its latest Jira values.
+                    "on_dashboard INTEGER DEFAULT 0", "issue_type TEXT",
+                    "jira_status TEXT", "jira_done INTEGER"):
             try:
                 con.execute(f"ALTER TABLE reviews ADD COLUMN {col}")
             except sqlite3.OperationalError:
                 pass
+        # Backfill for rows from before on_dashboard existed: anything already worked
+        # on came from the Triage list. Idempotent (only ever sets the flag).
+        con.execute("UPDATE reviews SET on_dashboard = 1 WHERE key LIKE 'AUT-%' "
+                    "AND (status != 'pending' OR bot_rca_json IS NOT NULL)")
         # Small key/value store for dashboard-editable configuration (Auto-RCA rules).
         con.execute("""
             CREATE TABLE IF NOT EXISTS app_settings (
@@ -120,15 +130,41 @@ def init_db() -> None:
                     "WHERE job_status = 'running'")
 
 
-def upsert_ticket(key: str, title: str, description: str, created_at: str) -> None:
+def upsert_ticket(key: str, title: str, description: str, created_at: str,
+                  issue_type: str | None = None, jira_status: str | None = None,
+                  jira_done: bool = False, pin: bool = False) -> None:
+    """pin=True puts the ticket on the Triage list for good: on_dashboard only ever
+    goes 0 -> 1, so a later sync after a type change or close never removes it."""
     with _conn() as con:
         con.execute("""
-            INSERT INTO reviews (key, title, description, created_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO reviews (key, title, description, created_at,
+                                 issue_type, jira_status, jira_done, on_dashboard)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(key) DO UPDATE SET
                 title = excluded.title,
-                description = excluded.description
-        """, (key, title, description, created_at))
+                description = excluded.description,
+                issue_type = COALESCE(excluded.issue_type, issue_type),
+                jira_status = COALESCE(excluded.jira_status, jira_status),
+                jira_done = CASE WHEN excluded.jira_status IS NULL THEN jira_done
+                                 ELSE excluded.jira_done END,
+                on_dashboard = MAX(COALESCE(on_dashboard, 0), excluded.on_dashboard)
+        """, (key, title, description, created_at, issue_type, jira_status,
+              int(bool(jira_done)), int(bool(pin))))
+
+
+def get_dashboard_tickets(from_date: str = "", to_date: str = "") -> list[dict]:
+    """Tickets pinned to the Triage list (see upsert_ticket), optionally bounded by
+    created date. Dates are YYYY-MM-DD, inclusive; the caller validates the shape."""
+    sql = "SELECT * FROM reviews WHERE on_dashboard = 1 AND key LIKE 'AUT-%'"
+    args: list[str] = []
+    if from_date:
+        sql += " AND substr(created_at, 1, 10) >= ?"
+        args.append(from_date)
+    if to_date:
+        sql += " AND substr(created_at, 1, 10) <= ?"
+        args.append(to_date)
+    with _conn() as con:
+        return [dict(r) for r in con.execute(sql + " ORDER BY created_at DESC", args)]
 
 
 def get_ticket(key: str) -> dict | None:

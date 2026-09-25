@@ -87,36 +87,29 @@ import re as _re
 
 _DATE_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
-# _WORK_TYPES (imported from autorun): the work types the AUT project defines.
-# Whitelisted so a value picked in the UI dropdown is interpolated into JQL only if
-# it's a known type — the value can never be used to inject arbitrary JQL.
+# The work types the Triage list is about. A ticket synced while it is one of
+# these is pinned to the list for good (db.upsert_ticket), so it stays after
+# Jira changes its type or closes it.
+_TRIAGE_TYPES = ("Bug", "Incident")
+_PINNED_REFRESH_CHUNK = 50
 
 
 @app.get("/api/tickets")
-def list_tickets(from_date: str = "", to_date: str = "", include_resolved: bool = False,
-                 work_type: str = "bug_incident"):
-    """Fetch AUT tickets from Jira (optionally date-filtered) and sync locally.
+def list_tickets(from_date: str = "", to_date: str = ""):
+    """The Triage list: every AUT Bug + Incident raised in the date range, whatever
+    its status, plus every ticket already pinned to the list even if its type has
+    changed since. Everything is synced locally.
 
     from_date / to_date are YYYY-MM-DD (inclusive). Anything not matching that
     exact shape is ignored, so the values can't be used to inject JQL.
-    include_resolved=True drops the 'not Done' filter so closed tickets show too.
-    work_type selects the issue type(s): "bug_incident" (default) = Bug + Incident,
-    "all" = every type, or one exact name from _WORK_TYPES. Unknown values fall
-    back to the default, so the param can't inject JQL.
     """
     jira = _jira()
-    clauses = ["project = AUT"]
-    if work_type == "all":
-        pass  # no issuetype filter — every work type
-    elif work_type in _WORK_TYPES:
-        clauses.append(f'issuetype = "{work_type}"')
-    else:  # "bug_incident" default, and any unrecognized value
-        clauses.append("issuetype in (Bug, Incident)")
-    if not include_resolved:
-        clauses.append("statusCategory != Done")
-    if _DATE_RE.match(from_date):
+    from_date = from_date if _DATE_RE.match(from_date) else ""
+    to_date = to_date if _DATE_RE.match(to_date) else ""
+    clauses = ["project = AUT", "issuetype in (Bug, Incident)"]
+    if from_date:
         clauses.append(f'created >= "{from_date}"')
-    if _DATE_RE.match(to_date):
+    if to_date:
         # include the whole 'to' day
         clauses.append(f'created <= "{to_date} 23:59"')
     jql = " AND ".join(clauses) + " ORDER BY created DESC"
@@ -124,12 +117,30 @@ def list_tickets(from_date: str = "", to_date: str = "", include_resolved: bool 
     # Return ONLY the tickets just fetched (AUT + this date range) with their
     # stored RCA state — not the whole DB, which still holds old non-AUT rows
     # from earlier syncs.
-    return [t for i in issues if (t := _sync_issue(i))]
+    rows = {t["key"]: t for i in issues if (t := _sync_issue(i))}
+    # Pinned tickets Jira's filter no longer matches (type changed away from
+    # Bug/Incident, or pushed out by the 100-newest cap). Re-fetch them so the row shows their current type
+    # and status; on a Jira failure fall back to the last-known local row.
+    extra = [t for t in store.get_dashboard_tickets(from_date, to_date)
+             if t["key"] not in rows]
+    for n in range(0, len(extra), _PINNED_REFRESH_CHUNK):
+        chunk = extra[n:n + _PINNED_REFRESH_CHUNK]
+        keys = ", ".join(t["key"] for t in chunk)   # keys come from our DB (AUT-<n>)
+        try:
+            fresh = {t["key"]: t for i in jira.search(f"key in ({keys})",
+                                                       max_results=len(chunk))
+                     if (t := _sync_issue(i))}
+        except JiraError:
+            fresh = {}
+        for t in chunk:
+            rows[t["key"]] = fresh.get(t["key"], t)
+    return sorted(rows.values(), key=lambda t: t.get("created_at") or "", reverse=True)
 
 
 def _sync_issue(issue: dict) -> dict | None:
-    """Store one Jira issue (title/description/created) locally and return the
-    stored row, which carries the RCA state the UI renders."""
+    """Store one Jira issue (title/description/created/type/status) locally and
+    return the stored row, which carries the RCA state the UI renders. A
+    Bug/Incident is pinned to the Triage list."""
     key = issue["key"]
     fields = issue.get("fields", {})
     title = fields.get("summary", "")
@@ -138,7 +149,13 @@ def _sync_issue(issue: dict) -> dict | None:
         from ..tickets import flatten_adf
         desc = flatten_adf(desc)
     created_at = fields.get("created", "")
-    store.upsert_ticket(key, title, desc, created_at)
+    issue_type = (fields.get("issuetype") or {}).get("name")
+    status = fields.get("status") or {}
+    jira_status = status.get("name")
+    done = (status.get("statusCategory") or {}).get("key") == "done"
+    store.upsert_ticket(key, title, desc, created_at,
+                        issue_type=issue_type, jira_status=jira_status, jira_done=done,
+                        pin=issue_type in _TRIAGE_TYPES)
     return store.get_ticket(key)
 
 
@@ -157,8 +174,8 @@ def normalize_ticket_key(text: str) -> str | None:
 def get_ticket_by_key(key: str):
     """Open ONE ticket straight from Jira by key, ignoring the list filters.
 
-    The list endpoint is bounded by work type, date range, the resolved toggle
-    and a 100-newest cap, so an older or resolved ticket can be impossible to
+    The list endpoint is bounded by Bug/Incident type, date range and a
+    100-newest cap, so an older or retyped ticket can be impossible to
     reach through it (AUT-10001 was the motivating case). This path has none of
     those bounds: any AUT key the Jira token can read is fetched, synced locally
     and returned in the same shape as a list row. 404 if Jira has no such issue."""

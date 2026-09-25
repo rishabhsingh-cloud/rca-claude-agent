@@ -171,3 +171,43 @@ def test_settings_kv_roundtrip(tmp_path, monkeypatch):
     assert db.get_setting("autorun") == {"enabled": True, "allowed_types": ["Bug"]}
     db.set_setting("autorun", {"enabled": False})
     assert db.get_setting("autorun") == {"enabled": False}
+
+
+def test_dashboard_pin_is_sticky(tmp_path, monkeypatch):
+    # Team feedback #1: a Bug/Incident stays on the Triage list after Jira changes
+    # its type or closes it. The flag only ever goes 0 -> 1.
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")
+    db.init_db()
+    db.upsert_ticket("AUT-1", "t", "d", "2026-09-10T10:00:00.000+0530",
+                     issue_type="Bug", jira_status="Open", pin=True)
+    db.upsert_ticket("AUT-1", "t2", "d", "2026-09-10T10:00:00.000+0530",
+                     issue_type="Task", jira_status="Done", jira_done=True, pin=False)
+    row = db.get_ticket("AUT-1")
+    assert row["on_dashboard"] == 1
+    assert (row["issue_type"], row["jira_status"], row["jira_done"]) == ("Task", "Done", 1)
+    # A never-pinned ticket is not on the list.
+    db.upsert_ticket("AUT-2", "t", "d", "2026-09-10", issue_type="Task", pin=False)
+    assert [t["key"] for t in db.get_dashboard_tickets()] == ["AUT-1"]
+
+
+def test_dashboard_tickets_date_bounds_and_aut_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")
+    db.init_db()
+    for key, created in [("AUT-1", "2026-09-01T09:00:00.000+0530"),
+                         ("AUT-2", "2026-09-15T23:30:00.000+0530"),
+                         ("GST-3", "2026-09-10T09:00:00.000+0530")]:
+        db.upsert_ticket(key, "t", "d", created, issue_type="Bug", pin=True)
+    keys = [t["key"] for t in db.get_dashboard_tickets("2026-09-05", "2026-09-15")]
+    assert keys == ["AUT-2"]  # 'to' day inclusive; non-AUT row skipped
+
+
+def test_dashboard_backfill_flags_worked_on_rows_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")
+    db.init_db()
+    db.upsert_ticket("AUT-1", "t", "d", "2026-09-01")
+    db.upsert_ticket("AUT-2", "t", "d", "2026-09-01")
+    db.save_rca("AUT-1", "{}", 1)
+    with db._conn() as con:  # simulate a DB from before the column existed
+        con.execute("UPDATE reviews SET on_dashboard = 0")
+    db.init_db()
+    assert [t["key"] for t in db.get_dashboard_tickets()] == ["AUT-1"]

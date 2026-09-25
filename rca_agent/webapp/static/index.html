@@ -54,6 +54,7 @@
   .badge.rejected  { background: #ffebe6; color: #bf2600; }
   .badge.unclear   { background: #fffae6; color: #974f0c; }
   .badge.auto      { background: #eae6ff; color: #403294; margin-left: 4px; }
+  .badge.moved     { background: #ebecf0; color: #42526e; margin-left: 4px; }
 
   /* Auto-RCA (poller) status + settings, in the Triage sidebar */
   .autorun-row { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #dfe1e6;
@@ -214,28 +215,10 @@
     <div class="filter-bar">
       <input type="text" id="searchBox" placeholder="Search key or title, or type a key (e.g. AUT-10001) to open it" oninput="onSearchInput()" onkeydown="onSearchKeydown(event)">
       <div id="triageFilters">
-        <label style="display:block;font-size:11px;color:#5e6c84;margin-bottom:8px;">Work type
-          <select id="workType" onchange="loadTickets()" style="width:100%;padding:6px 8px;border:1px solid #dfe1e6;border-radius:4px;font-size:12px;margin-top:2px;">
-            <option value="bug_incident">Bug + Incident</option>
-            <option value="all">All work types</option>
-            <option value="Bug">Bug</option>
-            <option value="Incident">Incident</option>
-            <option value="Defect">Defect</option>
-            <option value="Task">Task</option>
-            <option value="Enhancement">Enhancement</option>
-            <option value="New Feature">New Feature</option>
-            <option value="Maintenance">Maintenance</option>
-            <option value="Epic">Epic</option>
-            <option value="Subtask">Subtask</option>
-          </select>
-        </label>
         <div class="date-row">
           <label>From<input type="date" id="fromDate" onchange="loadTickets()"></label>
           <label>To<input type="date" id="toDate" onchange="loadTickets()"></label>
         </div>
-        <label style="font-size:11px;color:#5e6c84;display:flex;align-items:center;gap:6px;cursor:pointer;">
-          <input type="checkbox" id="includeResolved" onchange="loadTickets()" style="width:auto;"> Include resolved (Done) tickets
-        </label>
 
         <!-- Auto-RCA: the poller that investigates NEW tickets matching the rules
              below, into this dashboard for review. Never posts to Jira. -->
@@ -315,7 +298,7 @@ function switchTab(tab) {
     loadQuality();
     return;
   }
-  // Date/resolved filters only make sense for the Jira-synced Triage list.
+  // Date filters only make sense for the Jira-synced Triage list.
   document.getElementById('triageFilters').style.display = tab === 'triage' ? '' : 'none';
   if (tab === 'triage') loadAutorunStatus();
   document.getElementById('sidebarTitle').textContent =
@@ -432,20 +415,14 @@ async function loadTickets() {
     '<div style="padding:16px;color:#5e6c84;font-size:13px;">Refreshing...</div>';
   const from = document.getElementById('fromDate').value;
   const to = document.getElementById('toDate').value;
-  const incl = document.getElementById('includeResolved').checked;
-  const workType = document.getElementById('workType').value;
   // Remember the filters so a page refresh doesn't reset them.
   try {
     localStorage.setItem('triage.fromDate', from);
     localStorage.setItem('triage.toDate', to);
-    localStorage.setItem('triage.includeResolved', incl ? 'true' : 'false');
-    localStorage.setItem('triage.workType', workType);
   } catch (e) {}
   const qs = new URLSearchParams();
   if (from) qs.set('from_date', from);
   if (to) qs.set('to_date', to);
-  if (incl) qs.set('include_resolved', 'true');
-  if (workType) qs.set('work_type', workType);
   try {
     const res = await fetch('/api/tickets?' + qs.toString());
     tickets = await res.json();
@@ -458,7 +435,7 @@ async function loadTickets() {
 }
 
 // --- Open-by-key -----------------------------------------------------------
-// The list is bounded (work type, date range, resolved toggle, 100 newest), so a
+// The list is bounded (Bug/Incident, date range, 100 newest), so a
 // ticket outside those bounds can't be reached by filtering the list. When the
 // search text looks like a ticket key ("AUT-10001" or just "10001") and no loaded
 // ticket matches it, fetch that one ticket straight from Jira instead.
@@ -508,6 +485,17 @@ async function lookupTicketByKey(key) {
   }
 }
 
+// A pinned ticket stays on the Triage list after Jira changes its type or closes
+// it; these badges say why a non-Bug / closed ticket is still listed.
+function movedBadges(t) {
+  let out = '';
+  if (t.issue_type && !['Bug', 'Incident'].includes(t.issue_type))
+    out += `<span class="badge moved" title="Was a Bug/Incident when first listed">now ${escHtml(t.issue_type)}</span>`;
+  if (t.jira_done && t.jira_status)
+    out += `<span class="badge moved" title="Jira status">${escHtml(t.jira_status)}</span>`;
+  return out;
+}
+
 function renderTicketList() {
   const el = document.getElementById('ticketList');
   const q = (document.getElementById('searchBox').value || '').trim().toLowerCase();
@@ -527,6 +515,7 @@ function renderTicketList() {
       <div class="summary">${escHtml(t.title || '')}</div>
       <span class="badge ${t.status}">${t.status.replace('_', ' ')}</span>
       ${t.trigger_source === 'auto' ? '<span class="badge auto" title="Investigated automatically by Auto-RCA">auto</span>' : ''}
+      ${currentTab === 'triage' ? movedBadges(t) : ''}
       ${currentTab === 'dev' && t.bot_fix_json ? '<span style="margin-left:6px;font-size:10px;font-weight:700;color:#006644;">fix ready</span>' : ''}
     </div>
   `).join('');
@@ -1471,12 +1460,10 @@ async function autorunPollNow() {
   const today = new Date();
   const weekAgo = new Date();
   weekAgo.setDate(today.getDate() - 7);
-  let savedFrom, savedTo, savedIncl, savedWorkType;
+  let savedFrom, savedTo;
   try {
     savedFrom = localStorage.getItem('triage.fromDate');
     savedTo = localStorage.getItem('triage.toDate');
-    savedIncl = localStorage.getItem('triage.includeResolved');
-    savedWorkType = localStorage.getItem('triage.workType');
   } catch (e) {}
   document.getElementById('fromDate').value = savedFrom || fmt(weekAgo);
   // Don't let a stale saved 'To' date (e.g. yesterday's) silently hide tickets
@@ -1485,8 +1472,6 @@ async function autorunPollNow() {
   let toVal = savedTo || todayStr;
   if (toVal < todayStr) toVal = todayStr;
   document.getElementById('toDate').value = toVal;
-  document.getElementById('includeResolved').checked = savedIncl === 'true';
-  if (savedWorkType) document.getElementById('workType').value = savedWorkType;
 })();
 
 styleTabs();
