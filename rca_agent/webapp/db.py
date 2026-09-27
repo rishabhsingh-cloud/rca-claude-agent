@@ -128,6 +128,8 @@ def init_db() -> None:
         con.execute("UPDATE reviews SET job_status = 'failed', "
                     "job_error = 'Interrupted by a server restart — please retry.' "
                     "WHERE job_status = 'running'")
+    # Fix the "This period" counter's start day on the first start after it shipped.
+    get_period_start()
 
 
 def upsert_ticket(key: str, title: str, description: str, created_at: str,
@@ -477,3 +479,39 @@ def get_quality_stats() -> dict:
             "unclear_reasons": UNCLEAR_REASONS, "by_unclear_reason": by_unclear_reason,
             # Newest first; every "Not able to understand" with its reasons + note.
             "unclear_notes": sorted(unclear_notes, key=lambda n: n["at"] or "", reverse=True)}
+
+
+# --- "This period" counter (Quality tab) -------------------------------------
+
+PERIOD_START_KEY = "period_stats_start"
+
+
+def get_period_start(now: datetime | None = None) -> str:
+    """The IST day (YYYY-MM-DD) the period counter started counting from. Set once,
+    the first time it is asked for (= go-live day), and never changed after — so
+    tickets raised before the feature shipped are never counted."""
+    start = get_setting(PERIOD_START_KEY)
+    if not start:
+        start = (now or datetime.now(timezone.utc)).astimezone(IST).strftime("%Y-%m-%d")
+        set_setting(PERIOD_START_KEY, start)
+    return start
+
+
+def get_period_stats(from_date: str = "", to_date: str = "") -> dict:
+    """Counts for the Bug/Incident tickets RAISED in the period (Jira created date),
+    so all the numbers describe the same set of tickets and add up to `raised`.
+    from_date is clamped to the counter's start day. Dates are YYYY-MM-DD, inclusive;
+    the caller validates the shape."""
+    start = get_period_start()
+    from_date = max(from_date or start, start)
+    rows = get_dashboard_tickets(from_date, to_date)
+    accepted = sum(r["status"] == "accepted" for r in rows)
+    rejected = sum(r["status"] == "rejected" for r in rows)
+    unclear = sum(r["status"] == "unclear" for r in rows)
+    # Triage ran (an RCA exists) but nobody accepted, rejected or flagged it yet.
+    no_action = sum(bool(r["bot_rca_json"]) and r["status"] not in DECIDED_STATUSES
+                    for r in rows)
+    return {"start": start, "from": from_date, "to": to_date, "raised": len(rows),
+            "accepted": accepted, "rejected": rejected, "no_action": no_action,
+            "unclear": unclear,
+            "not_run": len(rows) - accepted - rejected - unclear - no_action}

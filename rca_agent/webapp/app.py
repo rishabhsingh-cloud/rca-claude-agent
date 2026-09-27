@@ -696,3 +696,20 @@ def scoreboard():
 def quality():
     """RCA-quality analytics for the Quality tab (accept/reject + VERDICT + cause)."""
     return store.get_quality_stats()
+
+
+@app.get("/api/quality/period")
+def quality_period(from_date: str = "", to_date: str = ""):
+    """The "This period" counter: Bug/Incident raised in the range (never before the
+    counter's go-live day) and how many were accepted / rejected / left untouched.
+    Syncs the range from Jira first, so "raised" includes tickets nobody has opened
+    in Triage yet; if Jira is down, counts what is already stored (stale=True)."""
+    from_date = from_date if _DATE_RE.match(from_date) else ""
+    to_date = to_date if _DATE_RE.match(to_date) else ""
+    from_date = max(from_date or store.get_period_start(), store.get_period_start())
+    stale = False
+    try:
+        list_tickets(from_date, to_date)
+    except JiraError:
+        stale = True
+    return {**store.get_period_stats(from_date, to_date), "stale": stale}

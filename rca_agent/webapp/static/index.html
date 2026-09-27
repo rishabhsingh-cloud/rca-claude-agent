@@ -320,6 +320,7 @@ async function loadQuality() {
   try {
     const s = await (await fetch('/api/quality')).json();
     el.innerHTML = renderQuality(s);
+    loadPeriodStats();
   } catch (e) {
     el.innerHTML = '<div style="color:#bf2600;padding:16px;font-size:13px;">Failed to load quality</div>';
   }
@@ -346,6 +347,16 @@ function renderQuality(s) {
         <div style="font-size:28px;font-weight:700;color:#974f0c;margin:4px 0;">${s.unclear || 0}</div>
         ${qbar(uncPct, '#974f0c')}<div style="font-size:12px;color:#974f0c;margin-top:4px;">${uncPct}% of reviewed</div></div>
     </div></div>`;
+
+  // "This period" counter — filled in by loadPeriodStats(); only #periodBody
+  // re-renders on a date change, so the date inputs keep their focus.
+  h += `<div class="card"><h3>This period</h3>
+    <div style="display:flex;gap:12px;align-items:center;font-size:13px;color:#5e6c84;margin-bottom:14px;flex-wrap:wrap;">
+      <label>From <input type="date" id="periodFrom" onchange="loadPeriodStats()"></label>
+      <label>To <input type="date" id="periodTo" onchange="loadPeriodStats()"></label>
+      <span id="periodSince"></span>
+    </div>
+    <div id="periodBody"><div style="font-size:13px;color:#5e6c84;">Loading…</div></div></div>`;
 
   const vColor = {'Issue Accepted': '#bf2600', 'Not a BUG': '#006644', 'Needs review': '#974f0c'};
   const vTotal = Object.values(s.by_verdict || {}).reduce((a, b) => a + b, 0) || 1;
@@ -394,6 +405,40 @@ function renderQuality(s) {
     <div class="card"><h3>Reviewer notes (${notes.length})</h3><div style="max-height:360px;overflow:auto;">${nh}</div></div>
   </div>`;
   return h;
+}
+
+// Counts for Bug/Incident raised in the chosen dates (never before go-live day).
+async function loadPeriodStats() {
+  const fromEl = document.getElementById('periodFrom'), toEl = document.getElementById('periodTo');
+  const body = document.getElementById('periodBody');
+  if (!body) return;
+  const qs = new URLSearchParams();
+  if (fromEl.value) qs.set('from_date', fromEl.value);
+  if (toEl.value) qs.set('to_date', toEl.value);
+  body.style.opacity = '0.5';
+  try {
+    const p = await (await fetch('/api/quality/period?' + qs.toString())).json();
+    fromEl.min = toEl.min = p.start;
+    if (!fromEl.value || fromEl.value < p.start) fromEl.value = p.from;
+    document.getElementById('periodSince').textContent = `Counting since ${p.start}`;
+    const tile = (label, n, bg, fg, sub) => `<div style="background:${bg};border-radius:12px;padding:14px;">
+        <div style="color:${fg};font-size:13px;font-weight:600;">${label}</div>
+        <div style="font-size:28px;font-weight:700;color:${fg};margin:4px 0;">${n}</div>
+        <div style="font-size:12px;color:${fg};">${sub}</div></div>`;
+    const pct = n => p.raised ? `${Math.round(n / p.raised * 100)}% of raised` : '&nbsp;';
+    body.innerHTML = `
+      ${p.stale ? '<div style="font-size:12px;color:#bf2600;margin-bottom:8px;">Jira unreachable — showing last synced data</div>' : ''}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;">
+        ${tile('Bugs/Incidents raised', p.raised, '#deebff', '#0747a6', 'Bug + Incident in AUT')}
+        ${tile('✓ Accepted', p.accepted, '#e3fcef', '#006644', pct(p.accepted))}
+        ${tile('✗ Rejected', p.rejected, '#ffebe6', '#bf2600', pct(p.rejected))}
+        ${tile('Triage run, no action', p.no_action, '#fffae6', '#974f0c', pct(p.no_action))}
+      </div>
+      <div style="font-size:12px;color:#5e6c84;margin-top:10px;">${p.not_run} not run yet · ${p.unclear} marked not understood</div>`;
+  } catch (e) {
+    body.innerHTML = '<div style="color:#bf2600;font-size:13px;">Failed to load period counts</div>';
+  }
+  body.style.opacity = '';
 }
 
 async function loadRcaTickets() {
