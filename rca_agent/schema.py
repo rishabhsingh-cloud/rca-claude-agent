@@ -143,6 +143,22 @@ def _regression_str(v: Verdict) -> str:
     return ("yes" if v.is_regression else "no" if v.is_regression is not None else "unknown")
 
 
+# Plain words for the triage codes, for text people read (the stored value stays
+# the code). Support reads the Jira comment too — "real_bug" means nothing to them.
+_TRIAGE_WORDS = {
+    Triage.REAL_BUG: "Real bug",
+    Triage.CONFIG: "Setting / setup issue",
+    Triage.ENVIRONMENT: "Server / environment issue",
+    Triage.LIKELY_DUPLICATE: "Probably a duplicate ticket",
+    Triage.INSUFFICIENT_EVIDENCE: "Not enough evidence yet",
+}
+
+
+def _plain_status(v: Verdict) -> str:
+    return (f"{_TRIAGE_WORDS[v.triage]} · "
+            f"Started after a recent change: {_regression_str(v)}")
+
+
 # The fixed disclaimer shown on top of every RCA, everywhere.
 DISCLAIMER = "Automated RCA — verify before acting"
 
@@ -177,8 +193,7 @@ def _key_links(v: Verdict) -> list[EvidenceLink]:
 def render_verdict(v: Verdict, brief: bool = False) -> str:
     """Human-readable rendering. `brief` = headline + plain summary + key links
     only (the QA glance); full = the complete evidence trail."""
-    status = (f"Confidence {v.confidence.value.upper()} · {v.triage.value} · "
-              f"regression {_regression_str(v)}"
+    status = (f"Confidence {v.confidence.value.upper()} · {_plain_status(v)}"
               + (f" ({v.introducing_mr})" if v.introducing_mr else ""))
     head = [f"=== RCA: {v.ticket} ==="]
     if v.headline:
@@ -241,7 +256,7 @@ def verdict_to_adf(v: Verdict) -> dict:
     """Render a verdict as a Jira ADF comment: a short, scannable summary up top
     and the full evidence trail tucked inside a collapsible 'RCA details' block.
     QA reads 3 lines; anyone who wants proof expands it."""
-    status = f"{v.triage.value} · regression {_regression_str(v)}"
+    status = _plain_status(v)
 
     visible = [
         # Disclaimer banner — first thing the reader sees on every posted RCA.

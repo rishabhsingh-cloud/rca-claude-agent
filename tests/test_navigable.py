@@ -140,3 +140,28 @@ def test_investigate_no_base_url_still_summarizes_without_links():
     # ...but a merge_request carries its own web_url regardless.
     mr = next((e for e in v.evidence_chain if e.kind == "merge_request"), None)
     assert mr is not None and mr.url.endswith("/merge_requests/42")
+
+
+def test_jira_status_line_uses_plain_words():
+    """Support reads the Jira comment too: the visible status line must say
+    "Real bug", not the stored code "real_bug"."""
+    import json
+
+    from rca_agent.schema import verdict_to_adf
+
+    v = _full_verdict()
+    v.is_regression = True
+    adf = verdict_to_adf(v)
+    visible = json.dumps([n for n in adf["content"] if n["type"] != "expand"],
+                         ensure_ascii=False)
+    assert "Real bug · Started after a recent change: yes" in visible
+    assert "real_bug" not in visible
+    assert "regression" not in visible
+
+
+def test_prompt_carries_plain_language_rule():
+    from rca_agent.prompts import build_system_prompt
+
+    p = build_system_prompt("http://gl")
+    assert "PLAIN LANGUAGE" in p
+    assert "Could a support person with no coding background" in p

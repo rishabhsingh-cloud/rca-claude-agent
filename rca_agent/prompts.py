@@ -36,11 +36,15 @@ NR_APP_MAP = (
 _EXAMPLE_VERDICT_OBJ = {
     "ticket": "AUT-1234",
     "tldr": "Invoice totals are blank in a few regions because those regions have no tax rate set up.",
-    "headline": "Invoice total shows blank for some regions after MR !42 changed the tax-rate lookup.",
+    "headline": (
+        "Invoice totals are blank for some regions since a recent change to how the "
+        "tax rate is looked up (MR !42)."
+    ),
     "cause_categories": ["code"],
     "probable_root_cause": (
-        "MR !42 changed the tax-rate lookup to assume every region has a mapped "
-        "rate; for unmapped regions it returns null and the total then renders blank."
+        "A recent change (MR !42) made the code that looks up the tax rate "
+        "(billing/config.py) assume every region has a rate. For regions without "
+        "one it gets an empty value, so the invoice total comes out blank."
     ),
     "plain_summary": (
         "For a few regions the invoice total comes out blank. It started after a "
@@ -49,13 +53,13 @@ _EXAMPLE_VERDICT_OBJ = {
     ),
     "evidence_chain": [
         {"kind": "stack_frame", "ref": "billing/invoice.py:27",
-         "detail": "where the total is calculated and the blank value surfaces",
+         "detail": "the code that adds up the invoice total — where the blank shows up",
          "url": "https://gitlab.example.com/mastersindia/gst-enterprise-service/-/blob/<sha>/billing/invoice.py#L27"},
         {"kind": "blame", "ref": "billing/config.py:14",
-         "detail": "the tax-rate lookup that returns null for unmapped regions",
+         "detail": "the code that looks up the tax rate — gives back an empty value for regions with no rate",
          "url": "https://gitlab.example.com/mastersindia/gst-enterprise-service/-/blob/<sha>/billing/config.py#L14"},
         {"kind": "merge_request", "ref": "!42",
-         "detail": "the change that introduced the unguarded lookup",
+         "detail": "the change that started the problem",
          "url": "https://gitlab.example.com/mastersindia/gst-enterprise-service/-/merge_requests/42"},
     ],
     "is_regression": True,
@@ -63,8 +67,10 @@ _EXAMPLE_VERDICT_OBJ = {
     "triage": "real_bug",
     "confidence": "high",
     "suggested_next_action": (
-        "Guard the tax-rate lookup against unmapped regions (or revert MR !42); "
-        "retest invoice creation for the affected regions."
+        "Dev team: make the tax-rate lookup handle regions with no rate set "
+        "(billing/config.py, added in MR !42), or undo MR !42; then retest creating "
+        "invoices for those regions. Support: tell the customer we found the problem "
+        "on our side and it is being fixed."
     ),
     "candidates": [],
     "blast_radius": ["create_invoice_endpoint"],
@@ -393,8 +399,32 @@ route it to engineering.
   which excludes EXP records (MR !3792)."
   If evidence is thin, say so plainly: "We can't tell yet why X fails — the logs
   don't show it."
+- PLAIN LANGUAGE (applies to `tldr`, `headline`, `plain_summary`,
+  `probable_root_cause` and `suggested_next_action`): the customer-support team
+  reads this RCA too, and most of them have never seen the code. Write every one
+  of these fields so a support colleague can follow it: short sentences,
+  everyday words, the thing the user sees first, then the reason. Say this, not
+  that:
+    null / None / undefined   -> "empty" / "missing"
+    endpoint / API call       -> "the request to our server"
+    exception / stack trace   -> "error"
+    collection / table / row  -> "where the data is saved" / "the saved record"
+    regression                -> "started after a recent change"
+    payload                   -> "the data sent"
+    NIC / IRP                 -> "the government e-invoice / e-way-bill portal"
+    config / flag / toggle    -> "the setting"
+  Technical names ARE still allowed in `headline`, `probable_root_cause` and
+  `suggested_next_action` (developers need them), but each one comes AFTER a
+  plain explanation, in brackets: "the code that looks up the tax rate
+  (billing/config.py)", never a bare "config.py returns None". `tldr` and
+  `plain_summary` keep their stricter no-names rule.
 - HEADLINE: write `headline` as ONE sentence read first — what's broken, why, and
-  the fix/MR if known.
+  the fix/MR if known — in plain words (see PLAIN LANGUAGE).
+- NEXT ACTION: start `suggested_next_action` with who does what, in plain words:
+  "Dev team: …" and/or "Support: tell the customer …" (for a customer-side cause,
+  what the customer should change). Keep the technical specifics a developer needs
+  (file, MR, what to change) AFTER the plain part — the fix agent reads them.
+  Never promise a date.
 - BE BRIEF (this is read by busy QA): `plain_summary` ≤ 2 sentences; each evidence
   `detail` ≤ 1 line; do NOT repeat the plain summary inside `probable_root_cause`;
   include only the load-bearing evidence (the suspect line + the introducing change
@@ -424,6 +454,9 @@ schema do not exist):
 # FINAL GATE — verify ALL of these before emitting the verdict:
 - [ ] `tldr` is ONE sentence, 25 words or fewer, and contains no file name,
       function name, collection name, or MR number. Count the words.
+- [ ] Could a support person with no coding background understand every sentence
+      in `tldr`, `headline`, `plain_summary`, `probable_root_cause` and
+      `suggested_next_action`? Every technical name is explained first.
 - [ ] Every file:line, SHA, and MR cited was fetched THIS session at the pinned SHA.
 - [ ] Every blob URL contains the pinned SHA, not a branch name.
 - [ ] Every distinct symptom in the ticket is accounted for by the evidence.
