@@ -101,7 +101,12 @@ def init_db() -> None:
                     # stays listed after Jira changes its type or closes it.
                     # issue_type / jira_status / jira_done are its latest Jira values.
                     "on_dashboard INTEGER DEFAULT 0", "issue_type TEXT",
-                    "jira_status TEXT", "jira_done INTEGER"):
+                    "jira_status TEXT", "jira_done INTEGER",
+                    # Auto-post: the Jira comment id of an RCA posted automatically
+                    # (Auto-RCA runs with auto_post on), before any human review. A
+                    # reject deletes that comment; an accept adopts it as comment_id.
+                    # auto_post_error holds why an automatic post failed.
+                    "auto_comment_id TEXT", "auto_posted_at TEXT", "auto_post_error TEXT"):
             try:
                 con.execute(f"ALTER TABLE reviews ADD COLUMN {col}")
             except sqlite3.OperationalError:
@@ -200,6 +205,25 @@ def save_rca(key: str, rca_json: str, turns_used: int | None = None) -> None:
             UPDATE reviews SET bot_rca_json = ?, status = 'rca_ready',
             turns_used = ?, error = NULL, updated_at = datetime('now') WHERE key = ?
         """, (rca_json, turns_used, key))
+
+
+def set_auto_comment(key: str, comment_id: str) -> None:
+    """Record an automatic Jira post of the bot's RCA (clears any earlier error)."""
+    with _conn() as con:
+        con.execute("UPDATE reviews SET auto_comment_id = ?, auto_posted_at = datetime('now'), "
+                    "auto_post_error = NULL WHERE key = ?", (comment_id, key))
+
+
+def set_auto_post_error(key: str, error: str) -> None:
+    with _conn() as con:
+        con.execute("UPDATE reviews SET auto_post_error = ? WHERE key = ?", (error, key))
+
+
+def clear_auto_comment(key: str) -> None:
+    """Forget the automatic post (its Jira comment was deleted or adopted)."""
+    with _conn() as con:
+        con.execute("UPDATE reviews SET auto_comment_id = NULL, auto_posted_at = NULL, "
+                    "auto_post_error = NULL WHERE key = ?", (key,))
 
 
 def save_fix(key: str, fix_json: str) -> None:

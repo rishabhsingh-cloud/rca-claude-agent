@@ -237,6 +237,8 @@
           <label>Skip tickets with labels<input type="text" id="arLabels" placeholder="qa-found, …"></label>
           <label>Skip non-prod host keywords<input type="text" id="arEnvKw" placeholder="qa, qa1, uat, staging, …"></label>
           <div class="hint">Matched against hostnames in the ticket text and the Environment field (qa3-enterprise.… → “qa3”). Jira’s own attachment host is ignored.</div>
+          <label class="toggle"><input type="checkbox" id="arAutoPost"> Post RCA to Jira automatically</label>
+          <div class="hint">Automatic runs only. The RCA is posted as a Jira comment as soon as it finishes; rejecting it here deletes that comment from Jira.</div>
           <div class="actions">
             <button class="save" id="arSave" onclick="saveAutorunSettings()">Save</button>
             <a style="color:#5e6c84;cursor:pointer;" onclick="toggleAutorunPanel(false)">Close</a>
@@ -560,6 +562,7 @@ function renderTicketList() {
       <div class="summary">${escHtml(t.title || '')}</div>
       <span class="badge ${t.status}">${t.status.replace('_', ' ')}</span>
       ${t.trigger_source === 'auto' ? '<span class="badge auto" title="Investigated automatically by Auto-RCA">auto</span>' : ''}
+      ${t.auto_comment_id && !['accepted', 'rejected'].includes(t.status) ? '<span class="badge auto" title="Posted to Jira automatically — awaiting review">on Jira</span>' : ''}
       ${currentTab === 'triage' ? movedBadges(t) : ''}
       ${currentTab === 'dev' && t.bot_fix_json ? '<span style="margin-left:6px;font-size:10px;font-weight:700;color:#006644;">fix ready</span>' : ''}
     </div>
@@ -580,6 +583,8 @@ async function selectTicket(key) {
   // ('running') or before the first one ('pending' has its own big Run button):
   // so rca_ready, accepted, rejected and failed can all be re-investigated.
   const canRerun = ticket.status !== 'running' && ticket.status !== 'pending';
+  // An Auto-RCA run already posted this RCA to Jira (awaiting review).
+  const onJira = !!ticket.auto_comment_id;
 
   document.getElementById('detail').innerHTML = `
     <div class="card">
@@ -604,20 +609,24 @@ async function selectTicket(key) {
       </div>
     </div>
 
+    ${isDev || alreadyDone ? '' : onJira ? `
+    <div class="hint" style="margin:8px 0;color:#006644;">✓ This RCA was posted to Jira automatically. Accept keeps it there; Reject deletes it from Jira.</div>`
+      : ticket.auto_post_error ? `
+    <div class="hint" style="margin:8px 0;color:#bf2600;">Automatic post to Jira failed: ${escHtml(ticket.auto_post_error)} — use Accept &amp; Post if the RCA is right.</div>` : ''}
     ${isDev ? '' : !alreadyDone ? `
     <div class="actions" id="actions">
       <button class="accept-btn" id="acceptBtn" onclick="acceptRca()" ${!hasRca ? 'disabled' : ''}>
         ✓ Accept
       </button>
-      <button class="accept-btn" id="acceptPostBtn" onclick="acceptAndPostRca()" ${!hasRca ? 'disabled' : ''} style="background:#006644;">
+      ${onJira ? '' : `<button class="accept-btn" id="acceptPostBtn" onclick="acceptAndPostRca()" ${!hasRca ? 'disabled' : ''} style="background:#006644;">
         ✓ Accept &amp; Post to Jira
-      </button>
+      </button>`}
       <button class="reject-btn" id="rejectBtn" onclick="showHumanRca()" ${!hasRca ? 'disabled' : ''}>
         ✗ Reject
       </button>
       <button class="reject-btn" id="rejectLocalBtn" onclick="rejectRcaLocal()" ${!hasRca ? 'disabled' : ''}
               title="Mark the bot's RCA as wrong without posting anything to Jira. Text in 'Your RCA' is kept locally.">
-        ✗ Reject (don't post)
+        ${onJira ? '✗ Reject (delete from Jira)' : "✗ Reject (don't post)"}
       </button>
       <button class="reject-btn" id="unclearBtn" onclick="showUnclearBox()" ${!hasRca ? 'disabled' : ''}
               style="color:#974f0c;border-color:#ff991f;"
@@ -1092,6 +1101,8 @@ async function pollRca(key) {
       if (idx !== -1) {
         tickets[idx].bot_rca_json = JSON.stringify(data.verdict);
         tickets[idx].status = 'rca_ready';
+        tickets[idx].auto_comment_id = data.auto_comment_id || null;
+        tickets[idx].auto_post_error = data.auto_post_error || null;
       }
       // Redraw the list even when this ticket isn't selected — an Auto-RCA run
       // finishes in the background with nothing selected.
@@ -1121,8 +1132,16 @@ async function rerunRca(key) {
              + 'Jira. Continue?')) {
     return;
   }
-  await fetch(`/api/tickets/${key}/reset`, {method:'POST'});
-  if (idx !== -1) { tickets[idx].status = 'pending'; tickets[idx].bot_rca_json = null; }
+  const rr = await fetch(`/api/tickets/${key}/reset`, {method:'POST'});
+  if (!rr.ok) {
+    const d = await safeJson(rr);
+    showToast('Error: ' + (d.detail || 'Could not reset'), true);
+    return;
+  }
+  if (idx !== -1) {
+    tickets[idx].status = 'pending'; tickets[idx].bot_rca_json = null;
+    tickets[idx].auto_comment_id = null; tickets[idx].auto_post_error = null;
+  }
   selectTicket(key);
   renderTicketList();
   await runRca(key);
@@ -1134,7 +1153,10 @@ async function acceptRca() {
     const res = await fetch(`/api/tickets/${currentKey}/accept`, {method:'POST'});
     if (!res.ok) throw new Error(await res.text());
     const idx = tickets.findIndex(t => t.key === currentKey);
-    if (idx !== -1) tickets[idx].status = 'accepted';
+    if (idx !== -1) {
+      tickets[idx].status = 'accepted';
+      if (tickets[idx].auto_comment_id) tickets[idx].comment_id = tickets[idx].auto_comment_id;
+    }
     showToast('✓ Accepted');
     selectTicket(currentKey);
     renderTicketList();
@@ -1151,6 +1173,9 @@ async function rejectRcaLocal() {
   const key = currentKey;
   const box = document.getElementById('humanRcaText');
   const text = box ? box.value.trim() : '';
+  const t0 = tickets.find(t => t.key === key);
+  const onJira = !!(t0 && t0.auto_comment_id);
+  if (onJira && !confirm('This will also delete the RCA comment from Jira. Continue?')) return;
   setActionBtns(true);
   try {
     const res = await fetch(`/api/tickets/${key}/reject_local`, {
@@ -1165,9 +1190,10 @@ async function rejectRcaLocal() {
       tickets[idx].status = 'rejected';
       tickets[idx].human_rca = text;
       tickets[idx].comment_id = '';
+      tickets[idx].auto_comment_id = null;
       if (text) tickets[idx].human_rca_draft = text;
     }
-    showToast('✗ Rejected (not posted to Jira)');
+    showToast(onJira ? '✗ Rejected — RCA deleted from Jira' : '✗ Rejected (not posted to Jira)');
     if (currentKey === key) selectTicket(key);
     renderTicketList();
     loadScoreboard();
@@ -1320,6 +1346,7 @@ async function postHumanRca() {
         // Drives the decided-card heading ("Human RCA posted" vs "not posted").
         tickets[idx].comment_id = (result && result.comment_id) || '';
         tickets[idx].human_rca_draft = null;  // server cleared it on post
+        tickets[idx].auto_comment_id = null;  // bot's auto-posted RCA was deleted first
       }
     });
   } catch(e) {
@@ -1446,6 +1473,7 @@ async function toggleAutorunPanel(show) {
     document.getElementById('arDaily').value = s.daily_cap;
     document.getElementById('arLabels').value = (s.exclude_labels || []).join(', ');
     document.getElementById('arEnvKw').value = (s.exclude_env_keywords || []).join(', ');
+    document.getElementById('arAutoPost').checked = !!s.auto_post;
     document.getElementById('arSince').textContent = s.enabled && s.enabled_at
       ? `on since ${new Date(s.enabled_at).toLocaleString()}` : '';
   } catch (e) {
@@ -1464,6 +1492,7 @@ async function saveAutorunSettings() {
     daily_cap: parseInt(document.getElementById('arDaily').value, 10),
     exclude_labels: csv('arLabels'),
     exclude_env_keywords: csv('arEnvKw'),
+    auto_post: document.getElementById('arAutoPost').checked,
   };
   btn.disabled = true;
   try {

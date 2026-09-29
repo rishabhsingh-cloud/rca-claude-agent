@@ -50,6 +50,8 @@ DEFAULT_SETTINGS: dict = {
     "enabled_at": None,            # UTC ISO, stamped when enabled flips off -> on
     "exclude_labels": ["qa-found"],
     "exclude_env_keywords": ["qa", "qa1", "qa2", "qa3", "uat", "staging", "preprod"],
+    # Post each automatic RCA to Jira as soon as it finishes (a reject deletes it).
+    "auto_post": False,
 }
 
 LIMITS = {
@@ -122,6 +124,10 @@ def apply_update(current: dict, update: dict, now: datetime | None = None) -> di
     for field in ("exclude_labels", "exclude_env_keywords"):
         if update.get(field) is not None:
             new[field] = _clean_tokens(update[field], field)
+    if update.get("auto_post") is not None:
+        if not isinstance(update["auto_post"], bool):
+            raise ValueError("auto_post must be true or false")
+        new["auto_post"] = update["auto_post"]
     if update.get("enabled") is not None:
         enabled = bool(update["enabled"])
         if enabled and not current.get("enabled"):

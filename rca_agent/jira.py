@@ -3,8 +3,9 @@
 The design's choice: the agent fetches tickets through the hosted Atlassian MCP
 server (OAuth bridge), rather than us managing a Jira PAT. This module holds the
 MCP server config + the read-only tool allow-list the agent may call. Writes
-(comments, transitions) are deliberately excluded — the agent stays read-only;
-posting a verdict back to Jira routes through human approval later.
+(comments, transitions) are deliberately excluded — the agent stays read-only.
+The webapp writes back itself: a human-approved post, or (when the Auto-RCA
+`auto_post` switch is on) an automatic post that a reject later deletes.
 
 No SDK import here, so it's testable and importable from the deterministic path.
 """
@@ -203,6 +204,14 @@ class JiraClient:
         if r.status_code >= 400:
             raise JiraError(f"Jira {r.status_code} posting comment: {r.text[:200]}")
         return r.json()
+
+    def delete_comment(self, key: str, comment_id: str) -> None:
+        """Delete a comment (an auto-posted RCA the reviewer rejected). A 404 means
+        someone already removed it on Jira — the goal is met, so it is not an error."""
+        ep = f"{self._base}/issue/{key}/comment/{comment_id}"
+        r = self._client.delete(ep)
+        if r.status_code >= 400 and r.status_code != 404:
+            raise JiraError(f"Jira {r.status_code} deleting comment: {r.text[:200]}")
 
     def post_verdict(self, key: str, verdict) -> dict:
         """Post a verdict as a Jira comment — short summary + collapsible 'RCA

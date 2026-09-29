@@ -251,6 +251,7 @@ def _run_rca_background(key: str) -> None:
         if bnote:
             v.notes = (v.notes + "\n\n" + bnote).strip() if v.notes else bnote
         store.save_rca(key, json.dumps(v.to_dict()), turns_used=turns_used)
+        _maybe_auto_post(key, v, jira)
     except (asyncio.TimeoutError, TimeoutError):
         mins = RCA_HARD_TIMEOUT_SECONDS // 60
         store.mark_failed(key, f"Timed out after {mins} minutes — the investigation "
@@ -262,6 +263,39 @@ def _run_rca_background(key: str) -> None:
     except Exception as e:
         traceback.print_exc()
         store.mark_failed(key, f"{type(e).__name__}: {str(e)[:240]}")
+
+
+def _maybe_auto_post(key: str, verdict, jira) -> None:
+    """Auto-RCA runs with the `auto_post` switch on go straight to Jira, before any
+    review; a later reject deletes the comment (`_withdraw_auto_post`). Manual runs
+    never post here. A failed post never fails the RCA — it is recorded on the row
+    and the reviewer can still use Accept & Post."""
+    ticket = store.get_ticket(key)
+    if not ticket or ticket.get("trigger_source") != "auto":
+        return
+    if not autorun.load_settings().get("auto_post"):
+        return
+    try:
+        res = jira.post_verdict(key, verdict)
+        store.set_auto_comment(key, str(res.get("id", "")))
+    except Exception as e:  # noqa: BLE001
+        store.set_auto_post_error(key, f"{type(e).__name__}: {str(e)[:200]}")
+
+
+def _withdraw_auto_post(key: str, ticket: dict) -> None:
+    """Delete the automatically posted RCA comment from Jira, if there is one.
+    Raises HTTPException(502) when Jira refuses, so the caller does NOT record the
+    decision while the wrong RCA is still visible on the ticket."""
+    cid = ticket.get("auto_comment_id")
+    if not cid:
+        return
+    try:
+        _jira().delete_comment(key, cid)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, "Could not delete the auto-posted RCA from Jira "
+                                 f"({type(e).__name__}: {str(e)[:200]}) — nothing was "
+                                 "changed; retry, or delete the comment on Jira by hand")
+    store.clear_auto_comment(key)
 
 
 @app.post("/api/tickets/{key}/rca")
@@ -292,6 +326,9 @@ def rca_status(key: str):
         result["turns_used"] = ticket.get("turns_used")
     elif ticket["status"] == "failed":
         result["error"] = ticket.get("error")
+    # Auto-post outcome, so the UI can show "on Jira" / the failure without a reload.
+    result["auto_comment_id"] = ticket.get("auto_comment_id")
+    result["auto_post_error"] = ticket.get("auto_post_error")
     # Always surface any saved (unposted) human RCA draft so the UI can restore it.
     if ticket.get("human_rca_draft"):
         result["human_rca_draft"] = ticket["human_rca_draft"]
@@ -436,11 +473,19 @@ def get_attachments(key: str):
 
 @app.post("/api/tickets/{key}/reset")
 def reset_rca(key: str):
-    """Clear stored RCA (and any fix built on it) so it can be re-run."""
+    """Clear stored RCA (and any fix built on it) so it can be re-run. An auto-posted
+    RCA nobody accepted is deleted from Jira too, so a stale one doesn't linger there
+    while the new run is under way."""
+    ticket = store.get_ticket(key)
+    # An accepted comment stays on Jira; the UPDATE below just forgets its auto id.
+    if ticket and ticket.get("auto_comment_id") and ticket["status"] != "accepted":
+        _refuse_if_posting(ticket)
+        _withdraw_auto_post(key, ticket)
     with store._conn() as con:
         con.execute("UPDATE reviews SET bot_rca_json=NULL, bot_fix_json=NULL, "
                     "status='pending', job_kind=NULL, job_status=NULL, "
-                    "job_error=NULL, job_result=NULL WHERE key=?", (key,))
+                    "job_error=NULL, job_result=NULL, auto_comment_id=NULL, "
+                    "auto_posted_at=NULL, auto_post_error=NULL WHERE key=?", (key,))
     return {"status": "reset"}
 
 
@@ -497,7 +542,8 @@ def accept(key: str):
     if ticket["status"] in store.DECIDED_STATUSES:
         raise HTTPException(400, "Already reviewed")
     _refuse_if_posting(ticket)
-    store.mark_accepted(key, "")
+    # Already on Jira from an automatic post: accepting adopts that comment.
+    store.mark_accepted(key, ticket.get("auto_comment_id") or "")
     return {"status": "accepted"}
 
 
@@ -513,6 +559,7 @@ def reject_local(key: str, body: RejectLocalRequest):
     if ticket["status"] in store.DECIDED_STATUSES:
         raise HTTPException(400, "Already reviewed")
     _refuse_if_posting(ticket)
+    _withdraw_auto_post(key, ticket)   # the rejected RCA comes off Jira first
     text = body.human_rca.strip()
     if text:
         store.save_human_rca_draft(key, text)
@@ -571,6 +618,10 @@ def accept_and_post(key: str):
         raise HTTPException(400, "No RCA found for this ticket — run RCA first")
     if ticket["status"] in store.DECIDED_STATUSES:
         raise HTTPException(400, "Already reviewed")
+    if ticket.get("auto_comment_id"):   # auto-posted already — don't post it twice
+        _refuse_if_posting(ticket)
+        store.mark_accepted(key, ticket["auto_comment_id"])
+        return {"status": "accepted"}
     if not store.start_job(key, "accept_post"):
         return {"status": "already_running"}
     threading.Thread(target=_accept_and_post_background, args=(key,), daemon=True).start()
@@ -583,6 +634,11 @@ def _reject_background(key: str, human_rca: str) -> None:
     import traceback
     try:
         jira = _jira()
+        # The rejected bot RCA comes off Jira before the human's RCA goes on.
+        cid = (store.get_ticket(key) or {}).get("auto_comment_id")
+        if cid:
+            jira.delete_comment(key, cid)
+            store.clear_auto_comment(key)
         adf = {
             "type": "doc", "version": 1,
             "content": [
@@ -625,6 +681,7 @@ def reject(key: str, body: RejectRequest):
 class AutorunSettingsUpdate(BaseModel):
     """Partial update from the dashboard panel; every field optional."""
     enabled: bool | None = None
+    auto_post: bool | None = None
     interval_seconds: int | None = None
     allowed_types: list[str] | None = None
     max_parallel: int | None = None
