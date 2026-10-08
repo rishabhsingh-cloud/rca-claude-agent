@@ -123,6 +123,32 @@ def init_db() -> None:
                 updated_at TEXT DEFAULT (datetime('now'))
             )
         """)
+        # Cost tab ledger: one row per agent run (RCA or fix), kept forever — a
+        # re-run or /reset overwrites the ticket's RCA but never its spend history.
+        # source_ref makes imports idempotent (e.g. 'phoenix:<span_id>').
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS agent_runs (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_key         TEXT,
+                kind               TEXT NOT NULL,
+                trigger            TEXT,
+                status             TEXT,
+                model              TEXT,
+                input_tokens       INTEGER DEFAULT 0,
+                output_tokens      INTEGER DEFAULT 0,
+                cache_read_tokens  INTEGER DEFAULT 0,
+                cache_write_tokens INTEGER DEFAULT 0,
+                cost_usd           REAL,
+                cost_source        TEXT,
+                num_turns          INTEGER,
+                duration_ms        INTEGER,
+                started_at         TEXT,
+                finished_at        TEXT,
+                source_ref         TEXT UNIQUE
+            )
+        """)
+        con.execute("CREATE INDEX IF NOT EXISTS idx_agent_runs_started "
+                    "ON agent_runs(started_at)")
         # Recover rows wedged at 'running' by a crash/restart mid-run: their
         # background thread is gone, so fail them (Retry button) instead of
         # leaving an un-runnable spinner.
@@ -135,6 +161,8 @@ def init_db() -> None:
                     "WHERE job_status = 'running'")
     # Fix the "This period" counter's start day on the first start after it shipped.
     get_period_start()
+    # Same for the Cost tab: the day live per-run cost recording began.
+    get_cost_start()
 
 
 def upsert_ticket(key: str, title: str, description: str, created_at: str,
@@ -539,3 +567,113 @@ def get_period_stats(from_date: str = "", to_date: str = "") -> dict:
             "accepted": accepted, "rejected": rejected, "no_action": no_action,
             "unclear": unclear,
             "not_run": len(rows) - accepted - rejected - unclear - no_action}
+
+
+# --- Cost tab ----------------------------------------------------------------
+
+COST_START_KEY = "cost_tracking_start"
+_RUN_COLS = ("ticket_key", "kind", "trigger", "status", "model", "input_tokens",
+             "output_tokens", "cache_read_tokens", "cache_write_tokens", "cost_usd",
+             "cost_source", "num_turns", "duration_ms", "started_at", "finished_at",
+             "source_ref")
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def get_cost_start() -> str:
+    """The IST day live cost tracking began (set once, on first start)."""
+    start = get_setting(COST_START_KEY)
+    if not start:
+        start = datetime.now(timezone.utc).astimezone(IST).strftime("%Y-%m-%d")
+        set_setting(COST_START_KEY, start)
+    return start
+
+
+def record_run(**row) -> bool:
+    """Insert one agent run into the ledger. Unknown keys are ignored. Returns
+    False when `source_ref` already exists (import re-run), True otherwise."""
+    row.setdefault("finished_at", _utc_now())
+    cols = [c for c in _RUN_COLS if c in row]
+    with _conn() as con:
+        cur = con.execute(
+            f"INSERT OR IGNORE INTO agent_runs ({', '.join(cols)}) "
+            f"VALUES ({', '.join('?' for _ in cols)})", [row[c] for c in cols])
+        return cur.rowcount > 0
+
+
+def _ist_day(ts: str | None) -> str:
+    """UTC ISO timestamp -> IST calendar day (YYYY-MM-DD)."""
+    if not ts:
+        return ""
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return ts[:10]
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(IST).strftime("%Y-%m-%d")
+
+
+def get_cost_stats(from_date: str = "", to_date: str = "", recent: int = 100) -> dict:
+    """Spend for the Cost tab. Dates are IST days (YYYY-MM-DD), inclusive; the
+    caller validates the shape. Ticket spend (rca/fix) and eval-harness spend are
+    kept apart so the eval runs never inflate "cost per ticket"."""
+    with _conn() as con:
+        rows = [dict(r) for r in con.execute(
+            "SELECT * FROM agent_runs ORDER BY started_at DESC").fetchall()]
+    sel = []
+    for r in rows:
+        day = _ist_day(r["started_at"] or r["finished_at"])
+        if (from_date and day < from_date) or (to_date and day > to_date):
+            continue
+        r["day"] = day
+        sel.append(r)
+
+    def agg(items: list[dict]) -> dict:
+        cost = sum(r["cost_usd"] or 0 for r in items)
+        return {
+            "runs": len(items),
+            "cost_usd": round(cost, 4),
+            "input_tokens": sum(r["input_tokens"] or 0 for r in items),
+            "output_tokens": sum(r["output_tokens"] or 0 for r in items),
+            "cache_read_tokens": sum(r["cache_read_tokens"] or 0 for r in items),
+            "cache_write_tokens": sum(r["cache_write_tokens"] or 0 for r in items),
+            "avg_cost_usd": round(cost / len(items), 4) if items else 0,
+            "no_cost": sum(r["cost_usd"] is None for r in items),
+        }
+
+    def group(key) -> dict:
+        out: dict[str, list] = {}
+        for r in sel:
+            out.setdefault(key(r) or "unknown", []).append(r)
+        return {k: agg(v) for k, v in sorted(out.items())}
+
+    tickets = [r for r in sel if r["kind"] in ("rca", "fix")]
+    ticket_keys = {r["ticket_key"] for r in tickets if r["ticket_key"]}
+    return {
+        "from": from_date, "to": to_date,
+        "tracking_start": get_cost_start(),
+        # Earliest imported (pre-tracking) run, so the tab can say how far back
+        # the history goes.
+        "backfill_start": min((_ist_day(r["started_at"]) for r in rows
+                               if r["trigger"] == "backfill" and r["started_at"]),
+                              default=None),
+        "total": agg(sel),
+        "tickets": {**agg(tickets), "distinct_tickets": len(ticket_keys),
+                    "avg_per_ticket_usd": round(sum(r["cost_usd"] or 0 for r in tickets)
+                                                / len(ticket_keys), 4)
+                    if ticket_keys else 0},
+        "failed": agg([r for r in sel if r["status"] == "failed"]),
+        "by_kind": group(lambda r: r["kind"]),
+        "by_trigger": group(lambda r: r["trigger"]),
+        "by_model": group(lambda r: r["model"]),
+        "by_day": group(lambda r: r["day"]),
+        "recent": [{k: r[k] for k in ("ticket_key", "kind", "trigger", "status", "model",
+                                       "input_tokens", "output_tokens",
+                                       "cache_read_tokens", "cache_write_tokens",
+                                       "cost_usd", "cost_source", "num_turns",
+                                       "duration_ms", "started_at")}
+                   for r in sel[:recent]],
+    }

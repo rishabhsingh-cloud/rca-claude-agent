@@ -25,17 +25,18 @@ import json
 import os
 from dataclasses import asdict, dataclass, field
 
+import claude_agent_sdk
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ResultMessage,
     TextBlock,
-    query,
 )
 
 from .config import Settings
 from .fix_tools import build_fix_server
 from .gitlab_client import GitLabClient
+from .usage import RunUsage
 from .verify import _parse_blob_url
 
 _MAX_EDIT_FILES = 8    # cap on how many distinct files we fetch + apply to
@@ -278,7 +279,8 @@ def _parse_json(text: str) -> dict | None:
 
 
 async def _explore_and_generate(verdict: dict, candidates: list[str],
-                                client: GitLabClient, settings: Settings) -> str:
+                                client: GitLabClient, settings: Settings,
+                                usage: RunUsage | None = None) -> str:
     server, tool_names = build_fix_server(client)
     options = ClaudeAgentOptions(
         system_prompt=FIX_EXPLORE_SYSTEM,
@@ -302,7 +304,10 @@ async def _explore_and_generate(verdict: dict, candidates: list[str],
         f"(in any repo). Emit the final JSON — tag each edit with the `project` it belongs to."
     )
     final = ""
-    async for message in query(prompt=prompt, options=options):
+    # Through the module (as in agent.py) so the Phoenix instrumentor traces it too.
+    async for message in claude_agent_sdk.query(prompt=prompt, options=options):
+        if usage is not None:
+            usage.observe(message)
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, TextBlock):
@@ -323,7 +328,8 @@ async def _explore_and_generate(verdict: dict, candidates: list[str],
     return final
 
 
-async def suggest_fix(verdict: dict, client: GitLabClient, settings: Settings) -> FixSuggestion:
+async def suggest_fix(verdict: dict, client: GitLabClient, settings: Settings,
+                      usage: RunUsage | None = None) -> FixSuggestion:
     candidates = _candidate_projects(verdict)
     caveats = _caveats(verdict, explored=True)
     if not candidates:
@@ -331,7 +337,7 @@ async def suggest_fix(verdict: dict, client: GitLabClient, settings: Settings) -
                              "(file:line), so there is no repo/starting point for a fix.",
                              caveats=_caveats(verdict, explored=False))
 
-    text = await _explore_and_generate(verdict, candidates, client, settings)
+    text = await _explore_and_generate(verdict, candidates, client, settings, usage)
     obj = _parse_json(text)
     if not obj:
         return FixSuggestion(False, reason="the fix agent did not return a valid fix "

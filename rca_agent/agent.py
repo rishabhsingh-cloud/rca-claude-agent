@@ -29,6 +29,7 @@ from .profiles import AgentProfile, build_profile_system_prompt
 from .prompts import build_system_prompt
 from .schema import CauseCategory, Confidence, EvidenceLink, Triage, Verdict
 from .tools import build_rca_server
+from .usage import RunUsage
 
 
 class AgentRunError(RuntimeError):
@@ -51,7 +52,8 @@ async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClie
                     images: list[dict] | None = None,
                     disallowed_tools: list[str] | None = None,
                     profile: AgentProfile | None = None,
-                    time_budget_s: float | None = None) -> tuple[str, int, set[str]]:
+                    time_budget_s: float | None = None,
+                    usage: RunUsage | None = None) -> tuple[str, int, set[str]]:
     """Run one investigation through the agent loop; return
     (final_text, turns_used, tools_used) — tools_used is the set of tool names the
     agent actually invoked (e.g. "mcp__rca__git_blame"), used by post-hoc guards.
@@ -162,6 +164,8 @@ async def run_agent(ticket_key: str, ticket_text: str | None, client: GitLabClie
         # when setup_tracing() runs — is actually used. A pre-bound `query` name
         # would still point at the original, untraced function.
         async for message in claude_agent_sdk.query(prompt=prompt, options=options):
+            if usage is not None:
+                usage.observe(message)  # tokens/cost for the Cost tab; never raises
             if isinstance(message, AssistantMessage):
                 turns_used += 1
                 for block in message.content:

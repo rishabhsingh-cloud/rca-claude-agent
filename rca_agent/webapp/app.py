@@ -17,6 +17,7 @@ from ..gitlab_client import build_client
 from ..jira import JiraClient, JiraError
 from ..schema import verdict_to_adf
 from ..tickets import build_ticket_source
+from ..usage import RunUsage
 from ..verify import verify_verdict
 from . import autorun
 from . import db as store
@@ -211,12 +212,35 @@ RCA_TIMEOUT_SECONDS = int(os.getenv("RCA_TIMEOUT_SECONDS", "600"))
 RCA_HARD_TIMEOUT_SECONDS = int(os.getenv("RCA_HARD_TIMEOUT_SECONDS", "900"))
 
 
+def _record_run(key: str, kind: str, usage: RunUsage, status: str,
+                started_at: str, model: str = "") -> None:
+    """Write one run to the Cost tab's ledger. Best-effort: a ledger failure is
+    logged and never fails the RCA / fix it describes. A run that never reached
+    the model (e.g. Jira fetch failed) spent nothing and is not recorded."""
+    import traceback
+    try:
+        usage.finish()
+        if not usage.observed:
+            return
+        ticket = store.get_ticket(key) or {}
+        # Fix runs only start from the button; an RCA may be manual or Auto-RCA.
+        trigger = (ticket.get("trigger_source") or "manual") if kind == "rca" else "manual"
+        store.record_run(ticket_key=key, kind=kind, trigger=trigger, status=status,
+                         started_at=started_at, model=usage.model or model,
+                         **{k: v for k, v in usage.to_row().items() if k != "model"})
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
+
 def _run_rca_background(key: str) -> None:
     """Run RCA in a background thread — saves result to DB when done."""
     import asyncio
     import traceback
     from ..agent import AgentRunError
     s = get_settings()
+    usage = RunUsage()
+    started_at = store._utc_now()
+    status = "failed"
     try:
         jira = _jira()
         client = _gl()
@@ -236,7 +260,7 @@ def _run_rca_background(key: str) -> None:
         raw, turns_used, tools_used = asyncio.run(
             asyncio.wait_for(
                 run_agent(tkey, text, client, s, jira_mcp=False, images=images,
-                          time_budget_s=RCA_TIMEOUT_SECONDS),
+                          time_budget_s=RCA_TIMEOUT_SECONDS, usage=usage),
                 timeout=RCA_HARD_TIMEOUT_SECONDS,
             )
         )
@@ -251,6 +275,7 @@ def _run_rca_background(key: str) -> None:
         if bnote:
             v.notes = (v.notes + "\n\n" + bnote).strip() if v.notes else bnote
         store.save_rca(key, json.dumps(v.to_dict()), turns_used=turns_used)
+        status = "ok"
         _maybe_auto_post(key, v, jira)
     except (asyncio.TimeoutError, TimeoutError):
         mins = RCA_HARD_TIMEOUT_SECONDS // 60
@@ -263,6 +288,8 @@ def _run_rca_background(key: str) -> None:
     except Exception as e:
         traceback.print_exc()
         store.mark_failed(key, f"{type(e).__name__}: {str(e)[:240]}")
+    finally:
+        _record_run(key, "rca", usage, status, started_at, model=s.model)
 
 
 def _maybe_auto_post(key: str, verdict, jira) -> None:
@@ -341,7 +368,10 @@ def _suggest_fix_background(key: str) -> None:
     proxy never times out a long-open request."""
     import asyncio
     import traceback
-    from ..fix_agent import suggest_fix
+    from ..fix_agent import _fix_model, suggest_fix
+    usage = RunUsage()
+    started_at = store._utc_now()
+    status = "failed"
     try:
         ticket = store.get_ticket(key)
         verdict = json.loads(ticket["bot_rca_json"])
@@ -350,17 +380,21 @@ def _suggest_fix_background(key: str) -> None:
         # Multi-file fixes legitimately explore for ~4 min; keep this comfortably
         # above the fix agent's own exploration budget (_MAX_TURNS) so a real run
         # isn't killed mid-flight and reported as a timeout.
-        sug = asyncio.run(asyncio.wait_for(suggest_fix(verdict, client, s), timeout=420))
+        sug = asyncio.run(asyncio.wait_for(suggest_fix(verdict, client, s, usage=usage),
+                                           timeout=420))
         result = sug.to_dict()
         # Persist so the suggestion survives a page refresh (it's a ~3-4 min run to
         # regenerate). Cleared by reset_rca when the RCA is re-run.
         store.save_fix(key, json.dumps(result))
         store.finish_job(key, result)
+        status = "ok"
     except (asyncio.TimeoutError, TimeoutError):
         store.fail_job(key, "Fix suggestion timed out after 7 minutes.")
     except Exception as e:  # noqa: BLE001 — surface any failure to the UI
         traceback.print_exc()
         store.fail_job(key, f"{type(e).__name__}: {str(e)[:200]}")
+    finally:
+        _record_run(key, "fix", usage, status, started_at, model=_fix_model())
 
 
 @app.get("/api/tickets/{key}/job")
@@ -753,6 +787,15 @@ def scoreboard():
 def quality():
     """RCA-quality analytics for the Quality tab (accept/reject + VERDICT + cause)."""
     return store.get_quality_stats()
+
+
+@app.get("/api/cost")
+def cost(from_date: str = "", to_date: str = ""):
+    """Token + USD spend per agent run for the Cost tab (IST days, inclusive).
+    Empty dates = all time."""
+    from_date = from_date if _DATE_RE.match(from_date) else ""
+    to_date = to_date if _DATE_RE.match(to_date) else ""
+    return store.get_cost_stats(from_date, to_date)
 
 
 @app.get("/api/quality/period")

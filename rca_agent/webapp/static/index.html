@@ -192,6 +192,9 @@
            padding: 12px 20px; border-radius: 6px; font-size: 14px; z-index: 999;
            display: none; }
   .toast.show { display: block; }
+.cost-table { width:100%; border-collapse:collapse; font-size:13px; color:#172b4d; }
+.cost-table th { text-align:left; font-weight:600; color:#5e6c84; font-size:12px; padding:6px 8px; border-bottom:1px solid #dfe1e6; }
+.cost-table td { padding:6px 8px; border-bottom:1px solid #f4f5f7; vertical-align:middle; white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -202,6 +205,7 @@
     <button id="tab-triage" onclick="switchTab('triage')" style="padding:6px 14px;border:none;border-radius:4px;font-size:13px;font-weight:600;cursor:pointer;">Triage</button>
     <button id="tab-dev" onclick="switchTab('dev')" style="padding:6px 14px;border:none;border-radius:4px;font-size:13px;font-weight:600;cursor:pointer;">Dev Agent</button>
     <button id="tab-quality" onclick="switchTab('quality')" style="padding:6px 14px;border:none;border-radius:4px;font-size:13px;font-weight:600;cursor:pointer;">Quality</button>
+    <button id="tab-cost" onclick="switchTab('cost')" style="padding:6px 14px;border:none;border-radius:4px;font-size:13px;font-weight:600;cursor:pointer;">Cost</button>
   </div>
 </div>
 
@@ -273,7 +277,7 @@ const unclearReasonsReady = fetch('/api/unclear_reasons').then(r => r.json())
   .then(d => { UNCLEAR_REASONS = d || {}; }).catch(() => {});
 
 function styleTabs() {
-  for (const [id, tab] of [['tab-triage', 'triage'], ['tab-dev', 'dev'], ['tab-quality', 'quality']]) {
+  for (const [id, tab] of [['tab-triage', 'triage'], ['tab-dev', 'dev'], ['tab-quality', 'quality'], ['tab-cost', 'cost']]) {
     const b = document.getElementById(id);
     const active = currentTab === tab;
     b.style.background = active ? '#fff' : 'rgba(255,255,255,0.2)';
@@ -293,11 +297,11 @@ function switchTab(tab) {
   currentTab = tab;
   currentKey = null;
   styleTabs();
-  const isQuality = tab === 'quality';
-  // Quality is a full-width dashboard — no ticket sidebar.
-  document.getElementById('sidebar').style.display = isQuality ? 'none' : '';
-  if (isQuality) {
-    loadQuality();
+  const isDashboard = tab === 'quality' || tab === 'cost';
+  // Quality and Cost are full-width dashboards — no ticket sidebar.
+  document.getElementById('sidebar').style.display = isDashboard ? 'none' : '';
+  if (isDashboard) {
+    tab === 'quality' ? loadQuality() : loadCost();
     return;
   }
   // Date filters only make sense for the Jira-synced Triage list.
@@ -441,6 +445,101 @@ async function loadPeriodStats() {
     body.innerHTML = '<div style="color:#bf2600;font-size:13px;">Failed to load period counts</div>';
   }
   body.style.opacity = '';
+}
+
+// --- Cost tab: tokens + USD per agent run (GET /api/cost) ---------------------
+const usd = n => n == null ? '—' : '$' + (n >= 100 ? n.toFixed(0) : n.toFixed(2));
+function ktok(n) {
+  n = n || 0;
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(0) + 'K';
+  return String(n);
+}
+const COST_KIND = {rca: 'RCA', fix: 'Dev agent', eval: 'Eval harness', unattributed: 'No ticket'};
+
+async function loadCost() {
+  const el = document.getElementById('detail');
+  el.innerHTML = `<div class="card"><h3>Agent cost</h3>
+    <div style="display:flex;gap:12px;align-items:center;font-size:13px;color:#5e6c84;margin-bottom:6px;flex-wrap:wrap;">
+      <label>From <input type="date" id="costFrom" onchange="loadCostBody()"></label>
+      <label>To <input type="date" id="costTo" onchange="loadCostBody()"></label>
+      <button onclick="document.getElementById('costFrom').value='';document.getElementById('costTo').value='';loadCostBody()" style="font-size:12px;padding:3px 8px;cursor:pointer;">All time</button>
+    </div>
+    <div id="costSince" style="font-size:12px;color:#5e6c84;"></div></div>
+    <div id="costBody"><div class="empty-state">Loading cost…</div></div>`;
+  loadCostBody();
+}
+
+async function loadCostBody() {
+  const body = document.getElementById('costBody');
+  if (!body) return;
+  const qs = new URLSearchParams();
+  const f = document.getElementById('costFrom').value, t = document.getElementById('costTo').value;
+  if (f) qs.set('from_date', f);
+  if (t) qs.set('to_date', t);
+  body.style.opacity = '0.5';
+  try {
+    const c = await (await fetch('/api/cost?' + qs.toString())).json();
+    body.innerHTML = renderCost(c);
+    document.getElementById('costSince').textContent =
+      `Live tracking since ${c.tracking_start}` +
+      (c.backfill_start ? ` · RCA runs from ${c.backfill_start} imported from run traces (dev-agent runs before tracking were not recorded)` : ' · earlier runs were not recorded');
+  } catch (e) {
+    body.innerHTML = '<div style="color:#bf2600;padding:16px;font-size:13px;">Failed to load cost</div>';
+  }
+  body.style.opacity = '';
+}
+
+function renderCost(c) {
+  const tile = (label, val, bg, fg, sub) => `<div style="background:${bg};border-radius:12px;padding:14px;">
+      <div style="color:${fg};font-size:13px;font-weight:600;">${label}</div>
+      <div style="font-size:28px;font-weight:700;color:${fg};margin:4px 0;">${val}</div>
+      <div style="font-size:12px;color:${fg};">${sub}</div></div>`;
+  const T = c.total || {}, tk = c.tickets || {}, k = c.by_kind || {};
+  const tokSum = r => (r.input_tokens || 0) + (r.output_tokens || 0) + (r.cache_read_tokens || 0) + (r.cache_write_tokens || 0);
+  if (!T.runs) return '<div class="card"><div style="font-size:13px;color:#5e6c84;">No agent runs in this range.</div></div>';
+  let h = `<div class="card"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;">
+    ${tile('Total spend', usd(T.cost_usd), '#deebff', '#0747a6', `${T.runs} runs · ${ktok(tokSum(T))} tokens`)}
+    ${tile('Avg per ticket', usd(tk.avg_per_ticket_usd), '#e3fcef', '#006644', `${tk.distinct_tickets || 0} tickets (RCA + dev agent)`)}
+    ${tile('Avg per RCA run', usd((k.rca || {}).avg_cost_usd), '#eae6ff', '#403294', `${(k.rca || {}).runs || 0} RCA runs`)}
+    ${tile('Avg per dev-agent run', usd((k.fix || {}).avg_cost_usd), '#e6fcff', '#065a6f', `${(k.fix || {}).runs || 0} dev-agent runs`)}
+    ${tile('Failed runs', usd((c.failed || {}).cost_usd), '#ffebe6', '#bf2600', `${(c.failed || {}).runs || 0} runs that produced no result`)}
+  </div>
+  ${T.no_cost ? `<div style="font-size:12px;color:#5e6c84;margin-top:10px;">${T.no_cost} run(s) were cut off before reporting a cost and are counted at $0.</div>` : ''}</div>`;
+
+  // Small breakdown tables share one renderer: label · runs · tokens · $ · bar.
+  const table = (title, groups, labelFn) => {
+    const keys = Object.keys(groups || {});
+    const max = Math.max(0.0001, ...keys.map(x => groups[x].cost_usd || 0));
+    const rows = keys.map(x => { const g = groups[x]; return `<tr>
+        <td>${escHtml(labelFn ? labelFn(x) : x)}</td><td style="text-align:right;">${g.runs}</td>
+        <td style="text-align:right;">${ktok(tokSum(g))}</td><td style="text-align:right;font-weight:600;">${usd(g.cost_usd)}</td>
+        <td style="width:30%;">${qbar((g.cost_usd || 0) / max * 100, '#0052cc')}</td></tr>`; }).join('');
+    return `<div class="card"><h3>${title}</h3><table class="cost-table">
+      <tr><th>&nbsp;</th><th style="text-align:right;">Runs</th><th style="text-align:right;">Tokens</th><th style="text-align:right;">Cost</th><th></th></tr>${rows}</table></div>`;
+  };
+  h += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;">
+    ${table('By agent', k, x => COST_KIND[x] || x)}
+    ${table('By trigger', c.by_trigger, x => ({manual: 'Manual', auto: 'Auto-RCA', backfill: 'Imported (before tracking)'})[x] || x)}
+    ${table('By model', c.by_model)}
+  </div>`;
+  const days = c.by_day || {}, dayKeys = Object.keys(days).sort().reverse();
+  const dayGroups = {}; dayKeys.forEach(d => dayGroups[d] = days[d]);
+  h += table('By day (IST)', dayGroups);
+
+  const rows = (c.recent || []).map(r => `<tr>
+      <td>${escHtml(r.ticket_key || '—')}</td><td>${escHtml(COST_KIND[r.kind] || r.kind)}</td>
+      <td>${escHtml(r.trigger || '')}</td><td>${escHtml(r.model || '')}</td>
+      <td style="text-align:right;">${ktok(r.input_tokens)}</td><td style="text-align:right;">${ktok(r.output_tokens)}</td>
+      <td style="text-align:right;">${ktok(r.cache_read_tokens)}</td><td style="text-align:right;">${ktok(r.cache_write_tokens)}</td>
+      <td style="text-align:right;font-weight:600;" title="${r.cost_source === 'estimated' ? 'Estimated from tokens — run ended before reporting a cost' : ''}">${r.cost_source === 'estimated' ? '≈' : ''}${usd(r.cost_usd)}</td>
+      <td style="color:${r.status === 'failed' ? '#bf2600' : '#006644'};">${escHtml(r.status || '')}</td>
+      <td style="white-space:nowrap;color:#5e6c84;">${escHtml((r.started_at || '').replace('T', ' ').replace('Z', '').slice(0, 16))}</td></tr>`).join('');
+  h += `<div class="card"><h3>Recent runs (${(c.recent || []).length})</h3><div style="overflow-x:auto;max-height:480px;overflow-y:auto;">
+    <table class="cost-table"><tr><th>Ticket</th><th>Agent</th><th>Trigger</th><th>Model</th>
+      <th style="text-align:right;">Input</th><th style="text-align:right;">Output</th><th style="text-align:right;">Cache read</th><th style="text-align:right;">Cache write</th>
+      <th style="text-align:right;">Cost</th><th>Status</th><th>Started (UTC)</th></tr>${rows}</table></div></div>`;
+  return h;
 }
 
 async function loadRcaTickets() {
